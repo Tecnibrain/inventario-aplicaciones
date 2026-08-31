@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# DATOS DE CLIENTE — nunca deben salir de este equipo.
+# El inventario se carga en el navegador en tiempo de ejecución; el repositorio
+# contiene solo la herramienta, jamás los datos.
+# ---------------------------------------------------------------------------
+*.csv
+*.tsv
+*.xlsx
+*.xlsm
+*.xltx
+*.xls
+*.json
+!package.json
+
+# Configuración exportada desde Administración: incluye el catálogo de
+# aplicaciones del cliente, que también revela información de su parque.
+*_estandar.json
+*_informe.*
+*_seleccion.*
+
+# ---------------------------------------------------------------------------
+# Ruido del sistema y del editor
+# ---------------------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+_tmp*

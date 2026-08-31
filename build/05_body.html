@@ -1,0 +1,102 @@
+</style>
+</head>
+<body data-mode="admin">
+
+<header class="topbar">
+  <div class="topbar-in">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+        <rect x="1.2" y="1.2" width="37.6" height="37.6" rx="10" stroke="#0FFEFB" stroke-width="1.6" opacity=".5"/>
+        <path d="M20 8.4l9.6 5v10.2L20 28.6l-9.6-5V13.4z" stroke="#0FFEFB" stroke-width="2"
+              stroke-linejoin="round" fill="none"/>
+        <path d="M10.4 13.4L20 18.4l9.6-5M20 18.4v10.2" stroke="#0FFEFB" stroke-width="1.5"
+              stroke-linejoin="round" opacity=".65"/>
+        <circle cx="20" cy="33.4" r="1.7" fill="#AFE3FC"/>
+      </svg>
+      <div class="brand-txt">
+        <div class="brand-name">Inventario de <em>Aplicaciones</em></div>
+        <div class="brand-sub" id="brandSub">Gestión de software y cumplimiento</div>
+      </div>
+    </div>
+    <div class="topbar-actions" id="topActions" hidden>
+      <div class="modesw" role="group" aria-label="Nivel de vista">
+        <button id="mAdmin" aria-pressed="true" title="Vista técnica completa">Administrador</button>
+        <button id="mCliente" aria-pressed="false" title="Vista ejecutiva sin tecnicismos">Cliente</button>
+      </div>
+      <div class="filemeta" title="Origen de datos cargado">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+        <b id="fileName">—</b><span id="fileRows"></span>
+      </div>
+      <button class="btn" id="btnExport" title="Exportar la selección actual">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+        Exportar</button>
+      <button class="btn" id="btnPrint" title="Imprimir o guardar como PDF">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
+        PDF</button>
+      <button class="btn btn-p" id="btnNew">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+        Cargar</button>
+    </div>
+  </div>
+</header>
+
+<!-- ============ PANTALLA DE CARGA ============ -->
+<section class="drop" id="dropScreen">
+  <div class="drop-card" id="dropCard">
+    <svg class="drop-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>
+    </svg>
+    <h2>Carga el inventario de tus equipos</h2>
+    <p>Arrastra el export de Intune, Configuration Manager o cualquier inventario en Excel/CSV.
+       Todo el procesamiento ocurre <b>dentro de tu navegador</b>: ningún dato sale del equipo.</p>
+    <button class="btn btn-p" id="btnPick" style="padding:11px 22px;font-size:13.5px">Seleccionar archivo</button>
+    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt" hidden>
+    <input type="file" id="cfgFile" accept=".json,application/json" hidden>
+    <div class="drop-formats">
+      <span class="tag">.XLSX</span><span class="tag">.XLSM</span><span class="tag">.CSV</span><span class="tag">.TSV</span>
+    </div>
+    <div class="privacy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      100&nbsp;% local · sin servidor · sin telemetría · funciona sin conexión
+    </div>
+    <div class="err" id="dropErr"></div>
+    <div style="margin-top:26px;padding-top:20px;border-top:1px solid var(--line-soft);
+                font-size:11.5px;color:var(--ink-4);text-align:left;line-height:1.7">
+      <b style="color:var(--ink-3);display:block;margin-bottom:5px">Columnas que se reconocen automáticamente</b>
+      Equipo · Usuario · Dominio · Fabricante · Aplicación · Versión · CPE · Sistema operativo ·
+      Versión de Windows · Fecha<br>
+      <span style="color:var(--ink-4)">También <b>Cliente</b>, <b>Área</b> y <b>Ubicación</b> si existen, y sus
+      equivalentes en inglés (DeviceName, SoftwareVendor, SoftwareName…). Los estándares de versión y las
+      reglas de cumplimiento se configuran después, en Administración.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ APLICACION ============ -->
+<main id="app" hidden>
+  <div class="shell">
+    <nav class="nav" id="nav" aria-label="Secciones"></nav>
+    <div style="min-width:0">
+      <div class="filterbar">
+        <div class="filterbar-in">
+          <div class="fsearch">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input type="search" id="qGlobal" placeholder="Buscar equipo, aplicación, usuario…" aria-label="Búsqueda global">
+          </div>
+          <span id="selHost" class="row" style="gap:9px"></span>
+          <span class="fhint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            Pulsa cualquier gráfico o fila para filtrar
+          </span>
+          <div class="chips" id="chips"></div>
+        </div>
+      </div>
+      <div class="view" id="view"></div>
+    </div>
+  </div>
+</main>
+
+<div id="tip" role="tooltip" aria-hidden="true"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>

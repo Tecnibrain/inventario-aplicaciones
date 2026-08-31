@@ -1,0 +1,8 @@
+# Normaliza los finales de línea: el repositorio guarda LF, el disco usa lo del sistema.
+# Sin esto, editar en Windows genera diffs enteros por cambios invisibles.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
+*.xlsx binary
