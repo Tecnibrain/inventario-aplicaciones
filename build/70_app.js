@@ -440,6 +440,10 @@ async function doExport(kind) {
 
 /* ---- acciones de la conexión con Defender ---- */
 async function gxAction(a) {
+  if (a === 'ps') {
+    const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));
+    return saveFile('extraer-defender.ps1', scriptPowerShell(lotes), 'text/plain;charset=utf-8');
+  }
   if (a === 'entrar') return conectar();
   if (a === 'salir') return desconectar();
   if (a === 'traer') {

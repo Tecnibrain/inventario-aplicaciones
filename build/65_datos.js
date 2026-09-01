@@ -235,6 +235,111 @@ async function traerDeDefender(cuales, lotes) {
   return totalFilas;
 }
 
+
+/* ---- 24.5 script de PowerShell -----------------------------------------
+   Camino sin registrar ninguna aplicacion: el modulo oficial de Microsoft ya
+   trae su propio registro multi-tenant, asi que el usuario solo inicia sesion.
+   El script deja los CSV listos para soltarlos en el tablero.
+   ------------------------------------------------------------------------ */
+function scriptPowerShell(lotes) {
+  const q = s => String(s).replace(/\r/g, '');
+  const bloques = [
+    ['parque',      'Parque de equipos',  kqlParque()],
+    ['catalogo',    'Catalogo agregado',  kqlCatalogo()],
+    ['excepciones', 'Excepciones',        kqlExcepciones()]
+  ];
+  let cuerpo = '';
+  for (const [id, titulo, kql] of bloques) {
+    cuerpo += `
+# ---------------------------------------------------------------- ${titulo}
+$kql = @'
+${q(kql)}
+'@
+Exportar -Nombre '${id}' -Titulo '${titulo}' -Kql $kql
+`;
+  }
+  if (lotes > 0) {
+    cuerpo += `
+# ------------------------------------------------- Detalle completo por lotes
+for ($i = 0; $i -lt ${lotes}; $i++) {
+    $kql = @"
+$(Plantilla -Lote $i)
+"@
+    Exportar -Nombre "detalle_$i" -Titulo "Detalle lote $($i + 1)/${lotes}" -Kql $kql
+}
+`;
+  }
+  const plantilla = lotes > 0 ? `
+function Plantilla {
+    param([int]$Lote)
+    $t = @'
+${q(kqlDetalle(0, lotes)).replace(/\$/g, '$$$$')}
+'@
+    return $t -replace 'hash\\(DeviceId, ${lotes}\\) == 0', "hash(DeviceId, ${lotes}) == $Lote"
+}
+` : '';
+
+  return `<#
+    Inventario de Aplicaciones - extraccion desde Microsoft Defender
+    Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
+
+    NO registra ninguna aplicacion en Entra ID. Usa el modulo oficial de
+    Microsoft, que trae su propio registro, e inicia sesion con TU cuenta.
+
+    Uso:
+      1. Abre PowerShell (no hace falta como administrador).
+      2. Ejecuta:  .\\extraer-defender.ps1
+      3. Inicia sesion en la ventana que se abre.
+      4. Arrastra los CSV de la carpeta 'salida' al tablero, todos a la vez.
+
+    Si es la primera vez, un administrador debe consentir el permiso
+    ThreatHunting.Read.All para Microsoft Graph PowerShell. El propio dialogo
+    de inicio de sesion ofrece el boton de consentimiento.
+#>
+
+$ErrorActionPreference = 'Stop'
+$Salida = Join-Path $PSScriptRoot 'salida'
+if (-not (Test-Path $Salida)) { New-Item -ItemType Directory -Path $Salida | Out-Null }
+
+# --- modulo: solo el de autenticacion, que es el ligero ---------------------
+if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
+    Write-Host 'Instalando Microsoft.Graph.Authentication para el usuario actual...' -ForegroundColor Yellow
+    Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
+}
+Import-Module Microsoft.Graph.Authentication
+
+Write-Host 'Iniciando sesion...' -ForegroundColor Cyan
+Connect-MgGraph -Scopes 'ThreatHunting.Read.All' -NoWelcome
+$ctx = Get-MgContext
+Write-Host ("Conectado como {0} en {1}" -f $ctx.Account, $ctx.TenantId) -ForegroundColor Green
+
+function Exportar {
+    param([string]$Nombre, [string]$Titulo, [string]$Kql)
+    Write-Host ("-> {0}: consultando..." -f $Titulo) -NoNewline
+    try {
+        $resp = Invoke-MgGraphRequest -Method POST \`
+            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' \`
+            -Body (@{ Query = $Kql } | ConvertTo-Json -Depth 4 -Compress) \`
+            -ContentType 'application/json'
+    } catch {
+        Write-Host ''
+        Write-Host ("   ERROR: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        return
+    }
+    $filas = $resp.results
+    if (-not $filas -or $filas.Count -eq 0) { Write-Host ' sin filas' -ForegroundColor DarkYellow; return }
+    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
+    $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
+    Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
+}
+${plantilla}${cuerpo}
+Write-Host ''
+Write-Host ("Listo. Archivos en: {0}" -f $Salida) -ForegroundColor Cyan
+Write-Host 'Arrastralos TODOS a la vez sobre el tablero: se funden en un solo modelo.' -ForegroundColor Cyan
+Disconnect-MgGraph | Out-Null
+`;
+}
+
 /* ---- 24.4 vista --------------------------------------------------------- */
 function vDatos(A, rows) {
   const g = CFG.graph || {};
@@ -280,7 +385,44 @@ function vDatos(A, rows) {
           mismo tramo del alfabeto y el análisis saldrá sesgado.</span>
       </div>
     </div>` +
-    sec('Conexión con Defender', 'Inicia sesión con tu cuenta y la página trae los datos sola') +
+    sec('Extraer con tu cuenta', 'Sin registrar ninguna aplicación: el módulo oficial de Microsoft ya trae la suya') +
+    `<div class="adm-grid">
+      <div class="card"><div class="card-h"><div><h3>Script de PowerShell</h3>
+        <p>Un comando, inicias sesión y deja los CSV listos</p></div></div>
+        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.65">
+          <p style="margin:0 0 12px">El script usa <b>Microsoft.Graph.Authentication</b>, el módulo oficial.
+          Ese módulo <b>ya está registrado por Microsoft</b>, así que no creas ninguna aplicación en Entra:
+          solo inicias sesión con tu cuenta de siempre. Lanza tus tres consultas y escribe los CSV en una
+          carpeta <code>salida</code>, que arrastras aquí de una vez.</p>
+          <div class="fld"><label for="psLotes">Lotes del detalle completo (0 = no traerlo)</label>
+            <input id="psLotes" type="number" min="0" max="64" value="0">
+            <span class="hint">Solo si necesitas el inventario crudo. Con tu parque son ~1,3 millones de filas:
+              tráelo acotado a un grupo con el filtro de arriba.</span></div>
+          <button class="btn btn-p" data-gx="ps">Descargar extraer-defender.ps1</button>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><div><h3>Qué hace, paso a paso</h3>
+        <p>Para que no ejecutes nada a ciegas</p></div></div>
+        <ol style="margin:14px 0 0;padding-left:20px;font-size:12.5px;color:var(--ink-3);line-height:1.8">
+          <li>Instala el módulo de autenticación de Microsoft si no lo tienes (solo para tu usuario).</li>
+          <li>Abre la ventana de inicio de sesión de Microsoft. <b>Tus credenciales no pasan por el script</b>.</li>
+          <li>Lanza las consultas contra <code>security/runHuntingQuery</code>.</li>
+          <li>Guarda un CSV por consulta y cierra la sesión.</li>
+        </ol>
+        <div class="banner" style="margin:14px 0 0">${ico('shield')}<div>
+          La primera vez, un administrador debe consentir el permiso <b>ThreatHunting.Read.All</b>
+          para Microsoft Graph PowerShell. El propio diálogo de inicio de sesión ofrece el botón.
+          No es un registro de aplicación: es aprobar una que ya existe.
+        </div></div>
+      </div>
+    </div>` +
+    sec('Conexión desde la página', 'Opción avanzada: requiere registrar una aplicación en Entra ID') +
+    `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
+      <b>Esto sí exige un registro.</b> Para que una página web reciba un token, Entra ID necesita saber
+      qué aplicación lo pide y a qué dirección puede devolverlo; si no, cualquier web podría pedir tokens
+      para tu tenant. No hay forma de saltárselo. Si prefieres no registrar nada, usa el script de arriba:
+      hace exactamente lo mismo.
+    </div></div>`+
     `<div class="adm-grid">
       <div class="card"><div class="card-h"><div><h3>Registro de la aplicación</h3>
         <p>Un formulario de cinco minutos en Entra ID. Ninguno de estos valores es secreto</p></div></div>
