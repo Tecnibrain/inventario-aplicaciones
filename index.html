@@ -3272,10 +3272,14 @@ const TOK_KEY = 'invapp.tok', PKCE_KEY = 'invapp.pkce';
 /* ---- 24.1 generacion de KQL -------------------------------------------- */
 const kqlEsc = s => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
-/** Filtro de equipos comun a las tres consultas, editable por el administrador. */
+/**
+ * Filtro de equipos comun a las tres consultas. Admite varias condiciones, una
+ * por linea; cada una se reindenta al nivel del bloque para que la consulta
+ * generada siga siendo legible al pegarla.
+ */
 function kqlFiltro() {
   const f = (CFG.kql && CFG.kql.filtro) != null ? CFG.kql.filtro : '| where DeviceType == "Workstation"';
-  return f.trim();
+  return String(f).split(/\r?\n/).map(l => l.trim()).filter(Boolean).join('\n    ');
 }
 /** Numero de lotes y lote actual, compartidos por las tres consultas. */
 const loteN = () => Math.max(1, Math.min(64, (CFG.kql && +CFG.kql.lotes) || 1));
@@ -3901,10 +3905,17 @@ function vDatos(A, rows) {
                border-radius:9px;padding:12px;font-family:ui-monospace,Consolas,monospace;font-size:12px;
                color:var(--ink);line-height:1.55;resize:vertical">${esc(texto)}</textarea>
       <div class="fld" style="margin-top:12px">
-        <label for="kqlFiltro">Filtro de equipos (se inserta en las tres consultas)</label>
-        <input id="kqlFiltro" data-cfg="kql.filtro" value="${esc(kqlFiltro())}"
-               placeholder='| where DeviceType == "Workstation"'>
-        <span class="hint">Aquí van tus condiciones: tipo de dispositivo, dominio, grupo de equipos.
+        <label for="kqlFiltro">Filtro de equipos · una condición por línea (se inserta en las tres consultas)</label>
+        <textarea id="kqlFiltro" data-cfg="kql.filtro" spellcheck="false" rows="3"
+          placeholder='| where DeviceType == "Workstation"&#10;| where DomainName == "BANCOLOMBIA"'
+          style="width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
+                 padding:9px 11px;font-family:ui-monospace,Consolas,monospace;font-size:12px;
+                 color:var(--ink);line-height:1.6;resize:vertical">${esc(kqlFiltro())}</textarea>
+        <span class="hint">Escribe tantas condiciones como necesites, cada una en su línea. Por ejemplo:
+          <code>| where DeviceType == "Workstation"</code>,
+          <code>| where DomainName == "BANCOLOMBIA"</code>,
+          <code>| where MachineGroup == "..."</code>,
+          <code>| where DeviceName startswith "pb0b"</code>.
           <b>No pongas <code>sort by</code></b>: si la exportación se corta, el recorte caerá siempre en el
           mismo tramo del alfabeto y el análisis saldrá sesgado.</span>
       </div>
