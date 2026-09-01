@@ -302,7 +302,7 @@ async function traerDeDefender(cuales, lotes) {
    trae su propio registro multi-tenant, asi que el usuario solo inicia sesion.
    El script deja los CSV listos para soltarlos en el tablero.
    ------------------------------------------------------------------------ */
-function scriptPowerShell(lotes) {
+function scriptPowerShell(lotes, propia) {
   const q = s => String(s).replace(/\r/g, '');
   const bloques = [
     ['parque',      'Parque de equipos',  kqlParque()],
@@ -370,7 +370,22 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
 Import-Module Microsoft.Graph.Authentication
 
 Write-Host 'Iniciando sesion...' -ForegroundColor Cyan
-Connect-MgGraph -Scopes 'ThreatHunting.Read.All' -NoWelcome
+${propia ? `# Registro propio con flujo de codigo de dispositivo: NO usa URI de
+# redireccion, asi que sirve cuando la organizacion no permite anadirlas.
+# La aplicacion debe tener Authentication > Allow public client flows = Yes.
+$conexion = @{
+    ClientId = '${kqlEsc((CFG.graph || {}).clientId || '')}'
+    TenantId = '${kqlEsc((CFG.graph || {}).tenantId || '')}'
+    Scopes   = 'ThreatHunting.Read.All'
+    NoWelcome = $true
+}
+# El nombre del parametro cambio entre versiones del modulo
+$p = (Get-Command Connect-MgGraph).Parameters
+if     ($p.ContainsKey('UseDeviceCode'))           { $conexion.UseDeviceCode = $true }
+elseif ($p.ContainsKey('UseDeviceAuthentication')) { $conexion.UseDeviceAuthentication = $true }
+Write-Host 'Se abrira una pagina para que escribas el codigo que aparezca abajo.' -ForegroundColor Yellow
+Connect-MgGraph @conexion` :
+`Connect-MgGraph -Scopes 'ThreatHunting.Read.All' -NoWelcome`}
 $ctx = Get-MgContext
 Write-Host ("Conectado como {0} en {1}" -f $ctx.Account, $ctx.TenantId) -ForegroundColor Green
 
@@ -491,6 +506,13 @@ function vDatos(A, rows) {
           Ese módulo <b>ya está registrado por Microsoft</b>, así que no creas ninguna aplicación en Entra:
           solo inicias sesión con tu cuenta de siempre. Lanza tus tres consultas y escribe los CSV en una
           carpeta <code>salida</code>, que arrastras aquí de una vez.</p>
+          <label class="chk" style="margin-bottom:12px">
+            <input type="checkbox" id="psPropia"${(CFG.graph || {}).clientId ? '' : ' disabled'}>
+            Usar mi propio registro de aplicación${(CFG.graph || {}).clientId ? '' : ' (rellena antes los identificadores abajo)'}
+          </label>
+          <p class="mini" style="margin:-6px 0 12px">Con código de dispositivo: <b>no usa URI de redirección</b>,
+            así que sirve aunque tu organización no permita añadirlas. La app necesita
+            <i>Authentication → Allow public client flows → Yes</i>.</p>
           <div class="fld"><label for="psLotes">Lotes del detalle completo (0 = no traerlo)</label>
             <input id="psLotes" type="number" min="0" max="64" value="0">
             <span class="hint">Solo si necesitas el inventario crudo. Con tu parque son ~1,3 millones de filas:
