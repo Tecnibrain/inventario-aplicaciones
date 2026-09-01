@@ -127,7 +127,7 @@ function barH(data, o) {
   const n = data.length, rowH = o.rowH || 24, padT = 4, padB = 6;
   const W = o.W || 430, LW = o.labelW || 152, RW = o.RW || 42, x0 = LW + 8, plotW = W - LW - RW - 8;
   const H = padT + n * rowH + padB;
-  const max = Math.max(...data.map(d => d[1])) || 1;
+  const max = vMax(data.map(d => d[1])) || 1;
   const bh = Math.min(13, rowH - 10);
   let s = '';
   for (let g = 1; g <= 3; g++) {
@@ -157,7 +157,7 @@ function barV(data, o) {
   if (!data.length) return '<div class="empty">Sin datos para esta selección</div>';
   const W = 430, H = 205, padL = 36, padR = 8, padT = 14, padB = 34;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const max = Math.max(...data.map(d => d[1])) || 1;
+  const max = vMax(data.map(d => d[1])) || 1;
   const step = plotW / data.length, bw = Math.min(40, step - 7);
   let s = '';
   for (let g = 0; g <= 3; g++) {
@@ -231,7 +231,7 @@ function timeline(data, o) {
   if (data.length < 2) return '<div class="empty">Se necesitan al menos dos fechas distintas</div>';
   const W = 430, H = 185, padL = 34, padR = 10, padT = 14, padB = 30;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const max = Math.max(...data.map(d => d[1])) || 1;
+  const max = vMax(data.map(d => d[1])) || 1;
   const X = i => padL + (data.length === 1 ? plotW / 2 : plotW * i / (data.length - 1));
   const Y = v => padT + plotH - plotH * v / max;
   let s = '';
@@ -266,7 +266,7 @@ function squarify(items, x, y, w, h) {
   let scale = (cw * ch) / total;
   const worst = (row, len) => {
     const sum = row.reduce((s, r) => s + r.v, 0) * scale;
-    const mx = Math.max(...row.map(r => r.v)) * scale, mn = Math.min(...row.map(r => r.v)) * scale;
+    const mx = vMax(row.map(r => r.v)) * scale, mn = vMin(row.map(r => r.v)) * scale;
     return Math.max((len * len * mx) / (sum * sum), (sum * sum) / (len * len * mn));
   };
   while (list.length) {
@@ -418,8 +418,8 @@ function geoMap(points, o) {
   if (!points.length) return { svg: '', legend: '' };
   // Lienzo equirectangular: x = lon+180 (0..360), y = 85-lat (0..170)
   const xs = points.map(p => p.lon + 180), ys = points.map(p => 85 - p.lat);
-  let x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
-  let y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+  let x0 = vMin(xs), x1 = vMax(xs);
+  let y0 = vMin(ys), y1 = vMax(ys);
   const px = Math.max(9, (x1 - x0) * .35), py = Math.max(7, (y1 - y0) * .35);
   x0 -= px; x1 += px; y0 -= py; y1 += py;
   let vw = x1 - x0, vh = y1 - y0;
@@ -430,7 +430,7 @@ function geoMap(points, o) {
   x0 = Math.max(0, Math.min(x0, 360 - vw));
   y0 = Math.max(0, Math.min(y0, 170 - vh));
 
-  const max = Math.max.apply(null, points.map(p => p.v)) || 1;
+  const max = vMax(points.map(p => p.v)) || 1;
   const rMax = Math.max(2.5, Math.min(13, vw / 14));
   let s = `<rect x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${vw.toFixed(1)}" height="${vh.toFixed(1)}" fill="#0C1113"/>`;
   for (let g = -180; g <= 180; g += 30) s += `<line class="geo-grat" x1="${g + 180}" y1="0" x2="${g + 180}" y2="170"/>`;

@@ -27,6 +27,10 @@ function pretty(s) {
   return s.replace(/[_]+/g, ' ').replace(/\s+/g, ' ')
     .replace(/\b([a-záéíóúñ])/g, m => m.toUpperCase());
 }
+/** Minimo y maximo sin difusion: `Math.min(...v)` pasa cada elemento como
+ *  argumento y desborda la pila de llamadas a partir de unas decenas de miles. */
+function vMin(a) { let m = Infinity; for (let i = 0; i < a.length; i++) if (a[i] < m) m = a[i]; return m; }
+function vMax(a) { let m = -Infinity; for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i]; return m; }
 function truncate(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
 /* ============================================================================
@@ -486,8 +490,8 @@ function buildModel(grid, fileName, sheet) {
     hasArea:    !!(cols.area != null && rows.some(r => r.area)),
     hasTime: !!(cols.ts != null && dates.length),
     hasUser: !!(cols.user != null && rows.some(r => r.user)),
-    minDate: dates.length ? new Date(Math.min(...dates)) : null,
-    maxDate: dates.length ? new Date(Math.max(...dates)) : null
+    minDate: dates.length ? new Date(vMin(dates)) : null,
+    maxDate: dates.length ? new Date(vMax(dates)) : null
   });
   return M;
 }

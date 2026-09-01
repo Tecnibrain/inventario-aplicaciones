@@ -161,7 +161,7 @@ function vMapas(A, rows) {
   const otros = A.topApps.filter(([k]) => !vendorTop.includes(vendorOfApp(k))).slice(0, 22)
     .map(([k, v]) => ({ key:k, label: nameOfApp(k), v, color:(A.appVers.get(k) || new Set()).size }));
   if (otros.length) groups.push({ name:'Otros fabricantes', v: otros.reduce((s,i)=>s+i.v,0), items: otros });
-  const maxVer = Math.max(1, ...A.frag.map(f => f[1]));
+  const maxVer = Math.max(1, vMax(A.frag.map(f => f[1])));
   const tm = treemap(groups, { maxColor:maxVer, colorLabel:'Versiones distintas', aria:'Mapa de portafolio' });
 
   const hmCols = A.osList.slice(0, 6).map(([k, v]) => ({ label:k, n:v, key:k }));

@@ -86,7 +86,7 @@ function trendMulti(labels, series, o) {
   if (labels.length < 2) return '<div class="empty">Se necesitan al menos dos lecturas guardadas para dibujar una tendencia</div>';
   const W = 620, H = 210, padL = 40, padR = 14, padT = 14, padB = 30;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const max = Math.max(1, ...series.map(s => Math.max(...s.v))) * 1.05;
+  const max = Math.max(1, vMax(series.map(s => vMax(s.v)))) * 1.05;
   const X = i => padL + (labels.length === 1 ? plotW / 2 : plotW * i / (labels.length - 1));
   const Y = v => padT + plotH - plotH * v / max;
   let s = '';
@@ -391,8 +391,8 @@ function vApp(A, rows, key) {
         ${nota ? '<div class="mini">en la versión aprobada · no puntúa</div>' : ''}</div>
       <div class="fact"><dt>Estado</dt><dd>${nota ? `<span class="sem sem-pill off">${esc(SCOPE_LAB[nota])}</span>` : semaforo(o.estado)}</dd></div>
       <div class="fact"><dt>Administrada</dt><dd>${r.gest ? 'Sí, por Intune' : 'No administrada'}</dd></div>
-      <div class="fact"><dt>Detección más antigua</dt><dd>${firstTs.length ? new Date(Math.min(...firstTs)).toLocaleDateString('es-CO') : '—'}</dd></div>
-      <div class="fact"><dt>Última detección</dt><dd>${firstTs.length ? new Date(Math.max(...firstTs)).toLocaleDateString('es-CO') : '—'}</dd></div>
+      <div class="fact"><dt>Detección más antigua</dt><dd>${firstTs.length ? new Date(vMin(firstTs)).toLocaleDateString('es-CO') : '—'}</dd></div>
+      <div class="fact"><dt>Última detección</dt><dd>${firstTs.length ? new Date(vMax(firstTs)).toLocaleDateString('es-CO') : '—'}</dd></div>
     </dl>
     ${nota ? `<div class="banner" style="margin:16px 0 0">${ico('info')}<div>
       <b>${esc(SCOPE_LAB[nota])}.</b> ${nota === 'fuera'
