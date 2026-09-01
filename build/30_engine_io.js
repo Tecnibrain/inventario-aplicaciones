@@ -382,6 +382,9 @@ const GEO = {"fiji":[177.98,-17.83],"fiyi":[177.98,-17.83],"fj":[177.98,-17.83],
    3. DETECCION DE COLUMNAS  ·  ingles + espanol
    ========================================================================== */
 const ROLES = [
+  ['count',  ['equipos','dispositivos','devicecount','devicecounts','numerodispositivos',
+              'numeroequipos','recuento','cantidadequipos','totalequipos','devices',
+              'instalaciones','installs','conteo','cantidad']],
   ['device', ['devicename','device','equipo','nombreequipo','hostname','host','computer','computername',
               'computador','maquina','machine','pc','nombredispositivo','dispositivo','asset','activo','nombrepc']],
   ['user',   ['username','user','usuario','nombreusuario','samaccountname','upn','owner','propietario','empleado']],
@@ -400,7 +403,17 @@ const ROLES = [
   ['cliente',['cliente','client','organizacion','organization','empresa','company','tenant','customer',
               'razonsocial','compania','grupo']],
   ['area',   ['area','departamento','division','unidad','gerencia','vicepresidencia','equipo_area',
-              'businessunit','unidadnegocio','centrocosto','costcenter','ou','departament']]
+              'businessunit','unidadnegocio','centrocosto','costcenter','ou','departament']],
+  ['eos',    ['endofsupportstatus','endofsupport','eos','findesoporte','estadosoporte',
+              'soportefinalizado','supportstatus']],
+  ['approved',['aprobada','versionaprobada','approvedversion','versionobjetivo','targetversion',
+              'versionesperada']],
+  ['salud',  ['sensorhealthstate','saludsensor','estadosensor','healthstate','sensorhealth']],
+  ['eos',    ['endofsupportstatus','endofsupport','eos','findesoporte','estadosoporte',
+              'soportefinalizado','supportstatus']],
+  ['approved',['aprobada','versionaprobada','approvedversion','versionobjetivo','targetversion',
+              'versionesperada']],
+  ['salud',  ['sensorhealthstate','saludsensor','estadosensor','healthstate','sensorhealth']]
 ];
 
 function detectColumns(headers) {
@@ -413,86 +426,3 @@ function detectColumns(headers) {
   }
   return cols;
 }
-
-/* ============================================================================
-   4. MODELO
-   ========================================================================== */
-const M = { rows: [], headers: [], cols: {}, fileName: '', sheet: '', hasGeo: false,
-            hasTime: false, hasUser: false, deviceApps: new Map(), maxDate: null, minDate: null };
-
-const BUCKETS = [[1,10,'1–10'],[11,25,'11–25'],[26,40,'26–40'],[41,55,'41–55'],
-                 [56,70,'56–70'],[71,90,'71–90'],[91,Infinity,'91+']];
-const bucketOf = n => (BUCKETS.find(b => n >= b[0] && n <= b[1]) || BUCKETS[BUCKETS.length - 1])[2];
-
-function buildModel(grid, fileName, sheet) {
-  const headers = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
-  const cols = detectColumns(headers);
-  if (cols.app == null && cols.vendor == null)
-    throw new Error('No se reconoció ninguna columna de aplicación o fabricante. ' +
-      'Comprueba que la primera fila contenga las cabeceras (SoftwareName, SoftwareVendor…).');
-
-  const g = (r, k) => cols[k] == null ? '' : (r[cols[k]] == null ? '' : r[cols[k]]);
-  const rows = [];
-  for (let i = 1; i < grid.length; i++) {
-    const r = grid[i];
-    if (!r || !r.some(c => c !== null && c !== undefined && String(c).trim() !== '')) continue;
-    const vendor = String(g(r, 'vendor')).trim();
-    const app    = String(g(r, 'app')).trim();
-    if (!vendor && !app) continue;
-    const cpeRaw = String(g(r, 'cpe')).trim();
-    const ts = parseDate(g(r, 'ts'));
-    const o = {
-      device: String(g(r, 'device')).trim() || '(sin equipo)',
-      user:   String(g(r, 'user')).trim(),
-      domain: String(g(r, 'domain')).trim(),
-      vendor: vendor || '(sin fabricante)',
-      app:    app || '(sin nombre)',
-      ver:    String(g(r, 'ver')).trim() || '(sin versión)',
-      cpeRaw,
-      cpe:    cpeRaw && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(cpeRaw),
-      os:     String(g(r, 'os')).trim(),
-      osver:  String(g(r, 'osver')).trim() || '(sin versión)',
-      geo:     String(g(r, 'geo')).trim(),
-      cliente: String(g(r, 'cliente')).trim(),
-      area:    String(g(r, 'area')).trim(),
-      ts, day: dayKey(ts), _raw: r
-    };
-    o.appKey = o.vendor + ' / ' + o.app;
-    rows.push(o);
-  }
-  if (!rows.length) throw new Error('El archivo no contiene filas de datos por debajo de la cabecera.');
-
-  // recuento global de apps por equipo -> bucket estable para el histograma
-  const dm = new Map();
-  for (const r of rows) {
-    let s = dm.get(r.device); if (!s) dm.set(r.device, s = new Set());
-    s.add(r.appKey);
-  }
-  const counts = new Map();
-  dm.forEach((s, d) => counts.set(d, s.size));
-  for (const r of rows) r.bucket = bucketOf(counts.get(r.device) || 0);
-
-  // version de referencia = la mas alta vista en TODO el archivo, para que el
-  // objetivo no se mueva al filtrar
-  const latestVer = new Map();
-  for (const r of rows) {
-    if (VER_UNK.test(r.ver)) continue;
-    const cur = latestVer.get(r.appKey);
-    if (cur === undefined || verCmp(r.ver, cur) > 0) latestVer.set(r.appKey, r.ver);
-  }
-
-  const dates = rows.map(r => r.ts).filter(Boolean);
-  Object.assign(M, {
-    rows, headers, cols, fileName, sheet,
-    deviceApps: counts, latestVer,
-    hasGeo:     !!(cols.geo != null && rows.some(r => r.geo)),
-    hasCliente: !!(cols.cliente != null && rows.some(r => r.cliente)),
-    hasArea:    !!(cols.area != null && rows.some(r => r.area)),
-    hasTime: !!(cols.ts != null && dates.length),
-    hasUser: !!(cols.user != null && rows.some(r => r.user)),
-    minDate: dates.length ? new Date(vMin(dates)) : null,
-    maxDate: dates.length ? new Date(vMax(dates)) : null
-  });
-  return M;
-}
-

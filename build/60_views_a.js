@@ -114,6 +114,37 @@ function trendMulti(labels, series, o) {
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || 'Tendencia')}">${s}</svg>` + leg;
 }
 
+/**
+ * Aviso de archivo cortado. La consola limita las filas por exportacion; si la
+ * consulta ademas lleva `sort by`, el corte cae siempre en el mismo tramo y el
+ * analisis sale sesgado sin que nada lo indique.
+ */
+function avisoFuentes() {
+  const cortadas = M.sources.filter(s => s.truncado && s.truncado.length);
+  let h = '';
+  if (cortadas.length) {
+    h += `<div class="alert crit" style="margin-top:14px"><div class="alert-ic">${ico('alert')}</div>
+      <div class="alert-b"><div class="alert-t">Una exportación parece estar cortada</div>
+      <div class="alert-d">` + cortadas.map(s =>
+        `<b>${esc(s.name)}</b>: ${s.truncado.join('; ')}.`).join('<br>') +
+      `<br>Si tu consulta termina en <code>sort by</code>, el recorte cae siempre en el mismo tramo
+       y lo que ves es una muestra sesgada, no el parque. Quita el <code>sort</code> y reparte la
+       consulta en lotes con <code>hash(DeviceId, N)</code>, o usa una consulta agregada.</div>
+      <button class="alert-a" data-go="admin">Ver cómo consultar por lotes</button></div></div>`;
+  }
+  if (M.mode !== 'detalle') {
+    const agr = M.sources.filter(s => s.shape === 'agregado').length;
+    h += `<div class="banner" style="margin-top:14px">${ico('info')}<div>
+      <b>Datos agregados.</b> ${agr} archivo${agr > 1 ? 's' : ''} sin detalle por equipo:
+      el catálogo, las versiones y el cumplimiento se calculan sobre recuentos.
+      ${CMP.tot.base === 'instalaciones'
+        ? 'Sin ninguna fuente con detalle, el cumplimiento se mide sobre <b>instalaciones</b>, no sobre equipos.'
+        : 'Las vistas por equipo solo muestran los equipos que sí traen detalle.'}
+    </div></div>`;
+  }
+  return h;
+}
+
 /* ============================================================================
    15. VISTA · RESUMEN EJECUTIVO (administrador)
    ========================================================================== */
@@ -132,10 +163,12 @@ function vResumen(A, rows) {
     kpi({ ic:'grid', label:'Aplicaciones detectadas', value: fmt(A.nApp), go:'aplicaciones',
       sub:`De <b>${fmt(A.nVendor)}</b> fabricantes` }),
     kpi({ ic:'shieldOk', label:'Cumplimiento', value: fmt1(t.pctOk) + ' %', meter: t.pctOk, st: stOf(t.pctOk), go:'cumplimiento',
-      sub: `<b>${fmt(t.ok)}</b> de ${fmt(t.n)} equipos · medido sobre <b>${fmt(t.scope)}</b> apps bajo estándar` +
+      sub: `<b>${fmt(t.ok)}</b> de ${fmt(t.n)} ${t.base} · medido sobre <b>${fmt(t.scope)}</b> apps bajo estándar` +
         (p ? ` · ${delta(t.pctOk, p.k.pctOk, true, ' pts')}` : '') }),
-    kpi({ ic:'alert', label:'Equipos fuera de cumplimiento', value: fmt(t.bad), st: t.bad ? 'crit' : 'ok', go:'cumplimiento',
-      sub: p ? `${delta(t.bad, p.k.bad, false)} desde ${p.fecha}` : `<b>${fmt(t.warn)}</b> más requieren atención` }),
+    kpi({ ic:'alert', label: t.base === 'equipos' ? 'Equipos fuera de cumplimiento' : 'Instalaciones que no cumplen',
+      value: fmt(t.bad), st: t.bad ? 'crit' : 'ok', go:'cumplimiento',
+      sub: `<b>${fmt(t.warn)}</b> más requieren atención` +
+        (p && t.base === 'equipos' ? ` · ${delta(t.bad, p.k.bad, false)} desde ${p.fecha}` : '') }),
     kpi({ ic:'fork', label:'Apps que requieren actualización', value: fmt(needUpd), st: needUpd ? 'warn' : 'ok', go:'versiones',
       sub:`<b>${fmt(A.debtTotal)}</b> instalaciones por detrás` }),
     kpi({ ic:'layers', label:'Equipos con software desactualizado', value: fmt(A.devLag.size),
@@ -152,17 +185,19 @@ function vResumen(A, rows) {
       sub:`Más de <b>${CFG.params.syncDias}</b> días sin reportar` })
   ];
 
+  const uni = t.base === 'equipos' ? 'Equipos' : 'Instalaciones';
   const dn = donut([
     ['Cumplen', t.ok, 'cumpl', 'Cumple'],
     ['Requieren atención', t.warn, 'cumpl', 'Requiere atención'],
     ['No cumplen', t.bad, 'cumpl', 'No cumple']
-  ].filter(d => d[1] > 0), { colors:['var(--ok)','var(--warn)','var(--crit)'], centerL:'Equipos',
-    centerV: t.n, unit:'Equipos', aria:'Estado de cumplimiento del parque' });
+  ].filter(d => d[1] > 0), { colors:['var(--ok)','var(--warn)','var(--crit)'], centerL: uni,
+    centerV: t.n, unit: uni, aria:'Estado de cumplimiento del parque' });
 
   const riesgo = CMP.appList.filter(o => o.riesgo > 0).slice(0, 10);
   const topInst = A.topApps.slice(0, 10).map(([k, v]) => [appLabel(k), v, 'appKey', k]);
 
   return viewHead('Resumen', 'Estado general del parque de software sobre la selección activa.') +
+    avisoFuentes() +
     `<div class="grid kpis" style="margin-top:14px">${kpis.join('')}</div>` +
     sec('Dónde intervenir primero', 'Riesgo = equipos incumplidores, ponderado por criticidad de la aplicación') +
     `<div class="gwide">` +
@@ -236,12 +271,12 @@ function vCumplimiento(A, rows) {
       : ' —las administradas, las críticas y las no permitidas—. El resto del inventario se muestra pero no puntúa.') +
     ` Puedes ampliar el alcance en Administración.`) +
     `<div class="grid kpis" style="margin-top:14px">
-      ${kpi({ ic:'shieldOk', label:'Equipos que cumplen', value: fmt(t.ok), st:'ok', meter: pct(t.ok,t.n),
-        sub:`<b>${fmt1(t.pctOk)} %</b> del parque` })}
+      ${kpi({ ic:'shieldOk', label: t.base === 'equipos' ? 'Equipos que cumplen' : 'Instalaciones al día',
+        value: fmt(t.ok), st:'ok', meter: pct(t.ok,t.n), sub:`<b>${fmt1(t.pctOk)} %</b> del total evaluado` })}
       ${kpi({ ic:'alert', label:'Requieren atención', value: fmt(t.warn), st:'warn', meter: pct(t.warn,t.n),
         sub:'Por debajo de la versión aprobada pero sobre la mínima' })}
       ${kpi({ ic:'ban', label:'No cumplen', value: fmt(t.bad), st:'crit', meter: pct(t.bad,t.n),
-        sub:'Bajo la versión mínima o con software no permitido' })}
+        sub:`Bajo la versión mínima o no permitido · medido en <b>${esc(t.base)}</b>` })}
       ${kpi({ ic:'cog', label:'Sin estándar definido', value: fmt(A.topApps.filter(([k]) => !rule(k)).length),
         go:'admin', sub:'Aplicaciones que aún no puntúan en el cálculo' })}
     </div>` +

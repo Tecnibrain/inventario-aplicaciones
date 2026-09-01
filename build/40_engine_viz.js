@@ -2,52 +2,72 @@
    6. AGREGACION
    ========================================================================== */
 function inc(map, k, v) { map.set(k, (map.get(k) || 0) + (v == null ? 1 : v)); }
-function addTo(map, k, v) { let s = map.get(k); if (!s) map.set(k, s = new Set()); s.add(v); }
+/** Conjunto contable. Con detalle guarda identificadores de equipo; con datos
+ *  agregados solo acumula el recuento. `.size` responde igual en ambos casos,
+ *  asi que el resto de la agregacion no necesita saber de que modo viene. */
+function CSet() { this.s = null; this.n = 0; }
+CSet.prototype.add = function (dev, w) {
+  if (dev) { if (!this.s) this.s = new Set(); this.s.add(dev); }
+  else this.n += (w || 1);
+};
+CSet.prototype.has = function (d) { return !!this.s && this.s.has(d); };
+CSet.prototype.forEach = function (f) { if (this.s) this.s.forEach(f); };
+Object.defineProperty(CSet.prototype, 'size', { get() { return (this.s ? this.s.size : 0) + this.n; } });
+function addTo(map, k, dev, w) { let s = map.get(k); if (!s) map.set(k, s = new CSet()); s.add(dev, w); }
 const sortDesc = m => Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
 const sizeDesc = m => Array.from(m.entries()).map(([k, s]) => [k, s.size]).sort((a, b) => b[1] - a[1]);
 
 function aggregate(rows) {
   const A = {
     n: rows.length,
-    devSet: new Set(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
+    devSet: new CSet(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
     appMeta: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
     appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
     dayDev: new Map(), bucketDev: new Map(), devApps: new Map(), devLast: new Map(),
-    cpeYes: 0, cpeNo: 0, vendorRows: new Map(), userSet: new Set()
+    cpeYes: 0, cpeNo: 0, eosRows: 0, vendorRows: new Map(), userSet: new Set()
   };
   for (const r of rows) {
-    A.devSet.add(r.device);
-    addTo(A.vendorDev, r.vendor, r.device);
-    inc(A.vendorRows, r.vendor);
-    addTo(A.appDev, r.appKey, r.device);
+    const w = r.w || 1;
+    if (r.device) A.devSet.add(r.device);
+    addTo(A.vendorDev, r.vendor, r.device, w);
+    inc(A.vendorRows, r.vendor, w);
+    addTo(A.appDev, r.appKey, r.device, w);
     addTo(A.appVers, r.appKey, r.ver);
     if (!A.appMeta.has(r.appKey)) A.appMeta.set(r.appKey, { vendor: r.vendor, app: r.app });
-    addTo(A.devApps, r.device, r.appKey);
-    addTo(A.osDev, r.osver, r.device);
-    if (r.geo) addTo(A.geoDev, r.geo, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.day) addTo(A.dayDev, r.day, r.device);
-    addTo(A.bucketDev, r.bucket, r.device);
+    if (r.device) addTo(A.devApps, r.device, r.appKey);
+    addTo(A.osDev, r.osver, r.device, w);
+    if (r.geo) addTo(A.geoDev, r.geo, r.device, w);
+    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device, w);
+    if (r.area) addTo(A.areaDev, r.area, r.device, w);
+    if (r.day) addTo(A.dayDev, r.day, r.device, w);
+    addTo(A.bucketDev, r.bucket, r.device, w);
     if (r.user) A.userSet.add(r.user);
-    r.cpe ? A.cpeYes++ : A.cpeNo++;
+    if (r.eosBad) A.eosRows += w;
+    r.cpe ? A.cpeYes += w : A.cpeNo += w;
     if (r.ts) { const p = A.devLast.get(r.device); if (!p || r.ts > p) A.devLast.set(r.device, r.ts); }
     // cobertura app x versionSO
     let mm = A.verOsDev.get(r.appKey); if (!mm) A.verOsDev.set(r.appKey, mm = new Map());
-    addTo(mm, r.osver, r.device);
+    addTo(mm, r.osver, r.device, w);
     // reparto de versiones dentro de cada app
     let vv = A.appVerDev.get(r.appKey); if (!vv) A.appVerDev.set(r.appKey, vv = new Map());
-    addTo(vv, r.ver, r.device);
+    addTo(vv, r.ver, r.device, w);
   }
   A.nDev = A.devSet.size;
+  A.nDevEstimado = false;
+  // El archivo de parque es el censo: manda sobre los equipos que aparezcan en
+  // las filas de detalle, que solo cubren las aplicaciones exportadas enteras.
+  // Con un filtro activo mandan las filas, porque el censo no se puede filtrar.
+  if (typeof M !== 'undefined' && M.devInfo && M.devInfo.size &&
+      rows.length === M.rows.length && M.devInfo.size > A.nDev) A.nDev = M.devInfo.size;
+  if (!A.nDev && typeof M !== 'undefined') {
+    if (M.devInfo && M.devInfo.size) A.nDev = M.devInfo.size;
+    else {
+      // sin detalle ni parque no se puede saber cuantos equipos hay; la app con
+      // mas cobertura da una cota inferior, y se marca como tal
+      let mx = 0; A.appDev.forEach(s => { if (s.size > mx) mx = s.size; });
+      A.nDev = mx; A.nDevEstimado = mx > 0;
+    }
+  }
   A.nApp = A.appDev.size;
   A.nVendor = A.vendorDev.size;
   A.topVendors = sizeDesc(A.vendorDev);
@@ -57,7 +77,9 @@ function aggregate(rows) {
   A.frag = Array.from(A.appVers.entries())
     .map(([k, s]) => [k, s.size, (A.appDev.get(k) || new Set()).size])
     .filter(x => x[1] > 1).sort((a, b) => b[1] - a[1] || b[2] - a[2]);
-  A.avgApps = A.nDev ? Array.from(A.devApps.values()).reduce((s, x) => s + x.size, 0) / A.nDev : 0;
+  A.avgApps = A.devApps.size
+    ? Array.from(A.devApps.values()).reduce((s, x) => s + x.size, 0) / A.devApps.size
+    : (A.nDev ? Array.from(A.appDev.values()).reduce((s, x) => s + x.size, 0) / A.nDev : 0);
   A.days = Array.from(A.dayDev.entries()).map(([k, s]) => [k, s.size]).sort((a, b) => a[0] < b[0] ? -1 : 1);
   A.buckets = BUCKETS.map(b => [b[2], (A.bucketDev.get(b[2]) || new Set()).size]);
 
@@ -68,14 +90,14 @@ function aggregate(rows) {
     A.pairs += all.size;
     const latest = M.latestVer ? M.latestVer.get(k) : undefined;
     if (latest === undefined) { A.unknownVer += all.size; return; }   // sin version comparable
-    const cur = vm.get(latest) || new Set();
-    A.upToDate += cur.size;
-    const behind = [];
-    all.forEach(d => { if (!cur.has(d)) behind.push(d); });
-    if (behind.length) {
-      A.debt.push({ key: k, behind: behind.length, total: all.size, latest, nver: vm.size });
-      A.debtTotal += behind.length;
-      for (const d of behind) inc(A.devLag, d);
+    const cur = vm.get(latest);
+    const curN = cur ? cur.size : 0;
+    A.upToDate += curN;
+    const behindN = all.size - curN;                 // funciona con detalle y con agregado
+    if (behindN > 0) {
+      A.debt.push({ key: k, behind: behindN, total: all.size, latest, nver: vm.size });
+      A.debtTotal += behindN;
+      all.forEach(d => { if (!cur || !cur.has(d)) inc(A.devLag, d); });
     }
   });
   A.debt.sort((a, b) => b.behind - a.behind || b.total - a.total);

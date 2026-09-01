@@ -315,6 +315,14 @@ document.addEventListener('click', async e => {
     } return;
   }
   if ((el = cl('[data-adm]'))) { await admAction(el.getAttribute('data-adm')); return; }
+  if ((el = cl('[data-load]'))) {
+    const modo = el.getAttribute('data-load');
+    $$('.expmenu').forEach(m => m.remove());
+    if (modo === 'add') { $('#fileInput').dataset.add = '1'; $('#fileInput').value = ''; $('#fileInput').click(); }
+    else { $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
+           $('#fileInput').value = ''; $('#dropErr').classList.remove('on'); }
+    return;
+  }
   if (t.id === 'btnExport') { toggleExportMenu(t); return; }
   if ((el = cl('[data-exp]'))) { await doExport(el.getAttribute('data-exp')); return; }
   $$('.expmenu').forEach(m => m.remove());
@@ -447,9 +455,25 @@ $('#btnPrint').addEventListener('click', () => {
   if (S.mode === 'cliente' && S.view !== 'informe') go('informe');
   setTimeout(() => window.print(), 120);
 });
+/* Cargar: anadir al conjunto actual o empezar de cero. */
 $('#btnNew').addEventListener('click', () => {
-  $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
-  $('#fileInput').value = ''; $('#dropErr').classList.remove('on');
+  const ex = $('.expmenu'); if (ex) { ex.remove(); return; }
+  const r = $('#btnNew').getBoundingClientRect();
+  const m = document.createElement('div');
+  m.className = 'expmenu';
+  m.style.cssText = `position:fixed;z-index:210;top:${r.bottom + 7}px;right:${Math.max(8, innerWidth - r.right)}px;
+    background:#0E0E0E;border:1px solid var(--line);border-radius:11px;padding:5px;min-width:250px;
+    box-shadow:0 14px 40px rgba(0,0,0,.7);display:flex;flex-direction:column;gap:2px`;
+  m.innerHTML = `
+    <button data-load="add" style="text-align:left;padding:9px 12px;border-radius:8px;font-size:12.5px">
+      <b style="display:block;color:var(--ink)">Añadir archivo</b>
+      <span class="mini">Se funde con lo ya cargado (lotes, parque, catálogo)</span></button>
+    <button data-load="new" style="text-align:left;padding:9px 12px;border-radius:8px;font-size:12.5px">
+      <b style="display:block;color:var(--ink)">Empezar de cero</b>
+      <span class="mini">Descarta lo cargado y abre la pantalla inicial</span></button>`;
+  document.body.appendChild(m);
+  $$('.expmenu button').forEach(b => { b.onmouseenter = () => b.style.background = 'var(--surface-2)';
+    b.onmouseleave = () => b.style.background = ''; });
 });
 
 /* ============================================================================
@@ -461,7 +485,8 @@ function fail(msg) {
   dropErr.classList.add('on');
   $('#dropScreen').hidden = false; $('#app').hidden = true; $('#topActions').hidden = true;
 }
-async function loadFile(file) {
+/** `añadir` funde el archivo con lo ya cargado; si no, empieza de cero. */
+async function loadFile(file, añadir) {
   if (!file) return;
   dropErr.classList.remove('on'); dropCard.classList.remove('hot');
   const name = file.name || 'archivo';
@@ -472,15 +497,17 @@ async function loadFile(file) {
     if (u8[0] === 0x50 && u8[1] === 0x4B) { const r = await readXlsx(buf); grid = r.rows; sheet = r.sheet; }
     else if (u8[0] === 0xD0 && u8[1] === 0xCF) throw new Error('Es un Excel antiguo (.xls). Ábrelo en Excel y guárdalo como .xlsx o .csv.');
     else grid = parseCsv(decodeText(buf));
-    buildModel(grid, name, sheet);
+    const src = addSource(grid, name, sheet, !añadir);
     M.aggFull = aggregate(M.rows);
     M.effVer = effVersions(M.rows);
     seedCatalog();
     histSnapshot();
-    S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {};
+    if (!añadir) { S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {}; }
+    if (añadir) toast(`Añadido: ${truncate(name, 24)} · ${fmt(src.filas)} filas (${src.shape})`);
     $('#qGlobal').value = '';
-    $('#fileName').textContent = truncate(name, 30);
-    $('#fileName').title = name + (sheet ? ' · hoja ' + sheet : '');
+    $('#fileName').textContent = M.sources.length > 1
+      ? M.sources.length + ' archivos' : truncate(name, 26);
+    $('#fileName').title = M.sources.map(s => s.name + ' (' + s.shape + ', ' + fmt(s.filas) + ')').join('\n');
     $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
     document.title = (CFG.org ? CFG.org + ' · ' : '') + 'Inventario de Aplicaciones';
     readHash();
@@ -489,7 +516,11 @@ async function loadFile(file) {
   } catch (err) { console.error(err); fail(err && err.message ? err.message : String(err)); }
 }
 $('#btnPick').addEventListener('click', () => $('#fileInput').click());
-$('#fileInput').addEventListener('change', e => loadFile(e.target.files[0]));
+$('#fileInput').addEventListener('change', e => {
+  const add = $('#fileInput').dataset.add === '1';
+  $('#fileInput').dataset.add = '';
+  for (const f of e.target.files) loadFile(f, add || (!$('#app').hidden && f !== e.target.files[0]));
+});
 dropCard.addEventListener('click', e => { if (e.target === dropCard) $('#fileInput').click(); });
 ['dragenter', 'dragover'].forEach(ev => window.addEventListener(ev, e => {
   e.preventDefault(); if ($('#dropScreen').hidden) return; dropCard.classList.add('hot');
@@ -499,11 +530,12 @@ dropCard.addEventListener('click', e => { if (e.target === dropCard) $('#fileInp
   if (ev === 'dragleave' && e.relatedTarget) return;
   dropCard.classList.remove('hot');
 }));
-window.addEventListener('drop', e => {
+window.addEventListener('drop', async e => {
   e.preventDefault();
-  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if (!f) return;
-  if (!$('#dropScreen').hidden || confirm('¿Reemplazar el inventario cargado por «' + f.name + '»?')) loadFile(f);
+  const fs = e.dataTransfer && e.dataTransfer.files;
+  if (!fs || !fs.length) return;
+  const primeraCarga = !$('#dropScreen').hidden;
+  for (let i = 0; i < fs.length; i++) await loadFile(fs[i], !(primeraCarga && i === 0));
 });
 
 /* arranque */

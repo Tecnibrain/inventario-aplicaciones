@@ -243,9 +243,18 @@ function computeCompliance(rows) {
   CMP.rowState = new Map(); CMP.dev = new Map(); CMP.app = new Map(); CMP.stale = new Set();
   const best = new Map();                        // device|app -> version mas alta
   for (const r of rows) {
+    if (!r.device) continue;                     // fila agregada: no hay equipo al que atribuirla
     const id = r.device + ' ' + r.appKey;
     const p = best.get(id);
     if (!p || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) best.set(id, r.ver);
+  }
+  // filas agregadas: no hay equipo al que atribuir, se pesan por recuento
+  const aggApp = new Map();
+  for (const r of rows) {
+    if (r.device) continue;
+    let a = aggApp.get(r.appKey);
+    if (!a) aggApp.set(r.appKey, a = { ok: 0, warn: 0, bad: 0, na: 0 });
+    a[evalVer(r.appKey, r.ver)] += (r.w || 1);
   }
   const pairApp = new Map();                     // appKey -> Map(device -> estado)
   best.forEach((ver, id) => {
@@ -263,13 +272,19 @@ function computeCompliance(rows) {
   // estado por fila, para poder filtrar por cumplimiento
   for (const r of rows) {
     const am = pairApp.get(r.appKey);
-    CMP.rowState.set(r, EST_LAB[(am && am.get(r.device)) || 'na']);
+    CMP.rowState.set(r, r.device
+      ? EST_LAB[(am && am.get(r.device)) || 'na']
+      : EST_LAB[evalVer(r.appKey, r.ver)]);
     if (r.ts) { const d = CMP.dev.get(r.device); if (d && (!d.last || r.ts > d.last)) d.last = r.ts; }
   }
-  // resumen por aplicacion
-  pairApp.forEach((am, k) => {
-    const o = { ok: 0, warn: 0, bad: 0, na: 0, total: am.size, key: k };
-    am.forEach(st => o[st]++);
+  // resumen por aplicacion: detalle y agregado suman en la misma ficha
+  const claves = new Set(Array.from(pairApp.keys()).concat(Array.from(aggApp.keys())));
+  claves.forEach(k => {
+    const am = pairApp.get(k), ag = aggApp.get(k);
+    const o = { ok: 0, warn: 0, bad: 0, na: 0, total: 0, key: k };
+    if (am) am.forEach(st => o[st]++);
+    if (ag) { o.ok += ag.ok; o.warn += ag.warn; o.bad += ag.bad; o.na += ag.na; }
+    o.total = o.ok + o.warn + o.bad + o.na;
     o.estado = o.bad ? 'bad' : o.warn ? 'warn' : o.ok ? 'ok' : 'na';
     o.pctOk = pct(o.ok, o.total);
     const r = rule(k) || {};
@@ -289,6 +304,19 @@ function computeCompliance(rows) {
     tot[d.estado]++;
   });
   tot.n = CMP.dev.size;
+  tot.base = 'equipos';
+  // Sin detalle por equipo no se puede decir "este equipo cumple": se mide sobre
+  // instalaciones, que es lo que el archivo agregado si permite afirmar.
+  // Con cualquier fuente agregada, el titular sale de las instalaciones: el
+  // detalle por equipo solo cubre las aplicaciones que se exportaron enteras,
+  // y mezclar ambas bases daria dos porcentajes distintos del mismo parque.
+  if ((!CMP.dev.size || (typeof M !== 'undefined' && M.hasAgregado)) && CMP.app.size) {
+    let ok = 0, warn = 0, bad = 0;
+    CMP.app.forEach((o, k) => { if (!inScope(k)) return; ok += o.ok; warn += o.warn; bad += o.bad; });
+    tot.ok = ok; tot.warn = warn; tot.bad = bad;
+    tot.n = ok + warn + bad;
+    tot.base = 'instalaciones';
+  }
   tot.pctOk = pct(tot.ok, tot.n);
   CMP.scope = new Set();
   CMP.app.forEach((o, k) => { if (inScope(k)) CMP.scope.add(k); });

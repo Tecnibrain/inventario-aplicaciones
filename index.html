@@ -948,6 +948,9 @@ const GEO = {"fiji":[177.98,-17.83],"fiyi":[177.98,-17.83],"fj":[177.98,-17.83],
    3. DETECCION DE COLUMNAS  ·  ingles + espanol
    ========================================================================== */
 const ROLES = [
+  ['count',  ['equipos','dispositivos','devicecount','devicecounts','numerodispositivos',
+              'numeroequipos','recuento','cantidadequipos','totalequipos','devices',
+              'instalaciones','installs','conteo','cantidad']],
   ['device', ['devicename','device','equipo','nombreequipo','hostname','host','computer','computername',
               'computador','maquina','machine','pc','nombredispositivo','dispositivo','asset','activo','nombrepc']],
   ['user',   ['username','user','usuario','nombreusuario','samaccountname','upn','owner','propietario','empleado']],
@@ -966,7 +969,17 @@ const ROLES = [
   ['cliente',['cliente','client','organizacion','organization','empresa','company','tenant','customer',
               'razonsocial','compania','grupo']],
   ['area',   ['area','departamento','division','unidad','gerencia','vicepresidencia','equipo_area',
-              'businessunit','unidadnegocio','centrocosto','costcenter','ou','departament']]
+              'businessunit','unidadnegocio','centrocosto','costcenter','ou','departament']],
+  ['eos',    ['endofsupportstatus','endofsupport','eos','findesoporte','estadosoporte',
+              'soportefinalizado','supportstatus']],
+  ['approved',['aprobada','versionaprobada','approvedversion','versionobjetivo','targetversion',
+              'versionesperada']],
+  ['salud',  ['sensorhealthstate','saludsensor','estadosensor','healthstate','sensorhealth']],
+  ['eos',    ['endofsupportstatus','endofsupport','eos','findesoporte','estadosoporte',
+              'soportefinalizado','supportstatus']],
+  ['approved',['aprobada','versionaprobada','approvedversion','versionobjetivo','targetversion',
+              'versionesperada']],
+  ['salud',  ['sensorhealthstate','saludsensor','estadosensor','healthstate','sensorhealth']]
 ];
 
 function detectColumns(headers) {
@@ -981,65 +994,198 @@ function detectColumns(headers) {
 }
 
 /* ============================================================================
-   4. MODELO
-   ========================================================================== */
-const M = { rows: [], headers: [], cols: {}, fileName: '', sheet: '', hasGeo: false,
-            hasTime: false, hasUser: false, deviceApps: new Map(), maxDate: null, minDate: null };
+   4. MODELO  ·  varias fuentes, detalle y agregado en el mismo tablero
+   ----------------------------------------------------------------------------
+   Un inventario completo (equipo x aplicacion x version) de un parque grande no
+   cabe en el navegador: medido, 371.000 filas ya cuestan 18 s y 295 MB, y a los
+   dos millones la pestana se cae. Por eso el modelo acepta tres formas de
+   archivo y las fusiona:
 
+     detalle    una fila por equipo y aplicacion        (lo clasico)
+     agregado   una fila por aplicacion y version, con una columna de recuento
+     parque     una fila por equipo, sin aplicaciones   (SO, usuario, fecha)
+
+   Con «parque + agregado» se ve el 100 % del parque con unas decenas de miles
+   de filas. El detalle se anade solo donde hace falta: las excepciones.
+   ========================================================================== */
+const M = {
+  rows: [], devInfo: new Map(), sources: [], headers: [], cols: {},
+  fileName: '', sheet: '', mode: 'detalle',
+  hasGeo: false, hasCliente: false, hasArea: false, hasTime: false, hasUser: false,
+  hasEos: false, hasDetalle: false, hasAgregado: false,
+  deviceApps: new Map(), latestVer: new Map(), maxDate: null, minDate: null
+};
+
+/* Tramos del histograma de densidad de software por equipo. */
 const BUCKETS = [[1,10,'1–10'],[11,25,'11–25'],[26,40,'26–40'],[41,55,'41–55'],
                  [56,70,'56–70'],[71,90,'71–90'],[91,Infinity,'91+']];
 const bucketOf = n => (BUCKETS.find(b => n >= b[0] && n <= b[1]) || BUCKETS[BUCKETS.length - 1])[2];
 
-function buildModel(grid, fileName, sheet) {
+/* Topes tipicos de exportacion de una consola: si el recuento cae justo encima,
+   lo mas probable es que el archivo venga cortado. */
+const TOPES = [1000, 5000, 10000, 30000, 50000, 100000, 200000, 500000];
+
+/** Clasifica el archivo por las columnas que trae. */
+function shapeOf(cols) {
+  const conApp = cols.app != null || cols.vendor != null;
+  const conDev = cols.device != null;
+  const conCnt = cols.count != null;
+  if (conApp && conCnt && !conDev) return 'agregado';
+  if (conApp && conDev) return 'detalle';
+  if (conApp && conCnt) return 'agregado';
+  if (conDev && !conApp) return 'parque';
+  if (conApp) return 'detalle';
+  return null;
+}
+
+/**
+ * Lee una cuadricula y la funde en el modelo. `reset` empieza de cero;
+ * si no, acumula: asi se cargan parque + catalogo + excepciones por separado.
+ */
+function addSource(grid, fileName, sheet, reset) {
   const headers = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
   const cols = detectColumns(headers);
-  if (cols.app == null && cols.vendor == null)
-    throw new Error('No se reconoció ninguna columna de aplicación o fabricante. ' +
-      'Comprueba que la primera fila contenga las cabeceras (SoftwareName, SoftwareVendor…).');
+  const shape = shapeOf(cols);
+  if (!shape) throw new Error(
+    'No se reconoció ninguna columna útil. Se necesita al menos una columna de ' +
+    'aplicación o de equipo. Comprueba que la primera fila sean las cabeceras.');
+
+  if (reset) {
+    M.rows = []; M.devInfo = new Map(); M.sources = [];
+    M.hasDetalle = false; M.hasAgregado = false;
+  }
 
   const g = (r, k) => cols[k] == null ? '' : (r[cols[k]] == null ? '' : r[cols[k]]);
-  const rows = [];
+  const nuevas = [];
+  let devs = 0;
+
   for (let i = 1; i < grid.length; i++) {
     const r = grid[i];
     if (!r || !r.some(c => c !== null && c !== undefined && String(c).trim() !== '')) continue;
-    const vendor = String(g(r, 'vendor')).trim();
-    const app    = String(g(r, 'app')).trim();
-    if (!vendor && !app) continue;
-    const cpeRaw = String(g(r, 'cpe')).trim();
+    const device = String(g(r, 'device')).trim();
     const ts = parseDate(g(r, 'ts'));
+
+    // ficha de equipo: se guarda siempre que la fila traiga nombre de equipo
+    if (device) {
+      let d = M.devInfo.get(device);
+      if (!d) { M.devInfo.set(device, d = { device }); devs++; }
+      const set = (k, v) => { if (v !== '' && v != null && !d[k]) d[k] = v; };
+      set('user', String(g(r, 'user')).trim());
+      set('domain', String(g(r, 'domain')).trim());
+      set('os', String(g(r, 'os')).trim());
+      set('osver', String(g(r, 'osver')).trim());
+      set('geo', String(g(r, 'geo')).trim());
+      set('cliente', String(g(r, 'cliente')).trim());
+      set('area', String(g(r, 'area')).trim());
+      set('salud', String(g(r, 'salud')).trim());
+      if (ts && (!d.ts || ts > d.ts)) d.ts = ts;
+    }
+
+    if (shape === 'parque') continue;              // sin aplicaciones que registrar
+
+    const vendor = String(g(r, 'vendor')).trim();
+    const app = String(g(r, 'app')).trim();
+    if (!vendor && !app) continue;
+
+    let w = 1;
+    if (cols.count != null) {
+      const n = parseFloat(String(g(r, 'count')).replace(/[^\d.,-]/g, '').replace(',', '.'));
+      w = isFinite(n) && n > 0 ? Math.round(n) : 1;
+    }
+    const cpeRaw = String(g(r, 'cpe')).trim();
+    const eos = String(g(r, 'eos')).trim();
     const o = {
-      device: String(g(r, 'device')).trim() || '(sin equipo)',
-      user:   String(g(r, 'user')).trim(),
-      domain: String(g(r, 'domain')).trim(),
-      vendor: vendor || '(sin fabricante)',
-      app:    app || '(sin nombre)',
-      ver:    String(g(r, 'ver')).trim() || '(sin versión)',
+      device, w,
+      user:    device ? '' : '',
+      vendor:  vendor || '(sin fabricante)',
+      app:     app || '(sin nombre)',
+      ver:     String(g(r, 'ver')).trim() || '(sin versión)',
       cpeRaw,
-      cpe:    cpeRaw && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(cpeRaw),
-      os:     String(g(r, 'os')).trim(),
-      osver:  String(g(r, 'osver')).trim() || '(sin versión)',
+      cpe:     !!cpeRaw && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(cpeRaw),
+      os:      String(g(r, 'os')).trim(),
+      osver:   String(g(r, 'osver')).trim() || '(sin versión)',
       geo:     String(g(r, 'geo')).trim(),
       cliente: String(g(r, 'cliente')).trim(),
       area:    String(g(r, 'area')).trim(),
+      eos, eosBad: /^(eos|endofsupport|fuera|expired|caducad|sin soporte|true|si|yes)/i.test(eos),
+      aprob:   String(g(r, 'approved')).trim(),
       ts, day: dayKey(ts), _raw: r
     };
     o.appKey = o.vendor + ' / ' + o.app;
-    rows.push(o);
+    nuevas.push(o);
   }
-  if (!rows.length) throw new Error('El archivo no contiene filas de datos por debajo de la cabecera.');
 
-  // recuento global de apps por equipo -> bucket estable para el histograma
-  const dm = new Map();
+  if (!nuevas.length && shape !== 'parque')
+    throw new Error('El archivo no contiene filas de datos por debajo de la cabecera.');
+
+  M.rows = M.rows.concat(nuevas);
+  if (shape === 'detalle') M.hasDetalle = true;
+  if (shape === 'agregado') M.hasAgregado = true;
+
+  const truncado = detectaCorte(shape, grid.length - 1, nuevas, devs);
+  M.sources.push({ name: fileName, sheet, shape, filas: nuevas.length || (grid.length - 1),
+                   equipos: devs, truncado, headers });
+  if (!M.headers.length || shape === 'detalle') { M.headers = headers; M.cols = cols; }
+  M.fileName = M.sources.map(s => s.name).join(' + ');
+  M.sheet = sheet;
+  recomputeModel();
+  return M.sources[M.sources.length - 1];
+}
+
+/**
+ * Detecta una exportacion cortada. La consola de Defender limita el numero de
+ * filas; si ademas la consulta lleva `sort by`, el corte siempre cae en el mismo
+ * tramo del alfabeto y el analisis sale sesgado sin avisar.
+ */
+function detectaCorte(shape, filas, nuevas, devs) {
+  const señales = [];
+  for (const t of TOPES) if (filas >= t * 0.995 && filas <= t) señales.push('el recuento (' + fmt(filas) + ') coincide con un tope de exportación habitual');
+  if (shape === 'detalle' && nuevas.length > 200) {
+    // si el corte cayo dentro de un equipo, el ultimo tendra muchas menos filas
+    const porDev = new Map();
+    for (const r of nuevas) if (r.device) porDev.set(r.device, (porDev.get(r.device) || 0) + 1);
+    const lista = Array.from(porDev.values());
+    if (lista.length > 20) {
+      const ord = lista.slice().sort((a, b) => a - b);
+      const mediana = ord[Math.floor(ord.length / 2)];
+      const ultimo = lista[lista.length - 1];
+      if (mediana > 4 && ultimo < mediana * 0.4)
+        señales.push('el último equipo trae ' + fmt(ultimo) + ' aplicaciones frente a una mediana de ' + fmt(mediana));
+    }
+  }
+  return señales;
+}
+
+/** Recalcula lo derivado despues de fusionar una fuente. */
+function recomputeModel() {
+  const rows = M.rows;
+  M.mode = M.hasDetalle && M.hasAgregado ? 'mixto' : M.hasAgregado ? 'agregado' : 'detalle';
+
+  // completar cada fila con la ficha del equipo, para que los filtros funcionen
   for (const r of rows) {
+    if (!r.device) continue;
+    const d = M.devInfo.get(r.device);
+    if (!d) continue;
+    if (!r.user && d.user) r.user = d.user;
+    if ((!r.osver || r.osver === '(sin versión)') && d.osver) r.osver = d.osver;
+    if (!r.os && d.os) r.os = d.os;
+    if (!r.geo && d.geo) r.geo = d.geo;
+    if (!r.cliente && d.cliente) r.cliente = d.cliente;
+    if (!r.area && d.area) r.area = d.area;
+    if (!r.ts && d.ts) { r.ts = d.ts; r.day = dayKey(d.ts); }
+  }
+
+  // recuento de apps por equipo -> bucket del histograma (solo con detalle)
+  const dm = new Map();
+  for (const r of rows) if (r.device) {
     let s = dm.get(r.device); if (!s) dm.set(r.device, s = new Set());
     s.add(r.appKey);
   }
   const counts = new Map();
   dm.forEach((s, d) => counts.set(d, s.size));
-  for (const r of rows) r.bucket = bucketOf(counts.get(r.device) || 0);
+  for (const r of rows) r.bucket = r.device ? bucketOf(counts.get(r.device) || 0) : '(agregado)';
 
-  // version de referencia = la mas alta vista en TODO el archivo, para que el
-  // objetivo no se mueva al filtrar
+  // version de referencia: la mas alta vista en todas las fuentes
   const latestVer = new Map();
   for (const r of rows) {
     if (VER_UNK.test(r.ver)) continue;
@@ -1047,71 +1193,94 @@ function buildModel(grid, fileName, sheet) {
     if (cur === undefined || verCmp(r.ver, cur) > 0) latestVer.set(r.appKey, r.ver);
   }
 
-  const dates = rows.map(r => r.ts).filter(Boolean);
+  const fechas = [];
+  for (const r of rows) if (r.ts) fechas.push(+r.ts);
+  M.devInfo.forEach(d => { if (d.ts) fechas.push(+d.ts); });
+
+  const tiene = k => rows.some(r => r[k]) || Array.from(M.devInfo.values()).some(d => d[k]);
   Object.assign(M, {
-    rows, headers, cols, fileName, sheet,
     deviceApps: counts, latestVer,
-    hasGeo:     !!(cols.geo != null && rows.some(r => r.geo)),
-    hasCliente: !!(cols.cliente != null && rows.some(r => r.cliente)),
-    hasArea:    !!(cols.area != null && rows.some(r => r.area)),
-    hasTime: !!(cols.ts != null && dates.length),
-    hasUser: !!(cols.user != null && rows.some(r => r.user)),
-    minDate: dates.length ? new Date(vMin(dates)) : null,
-    maxDate: dates.length ? new Date(vMax(dates)) : null
+    hasGeo: tiene('geo'), hasCliente: tiene('cliente'), hasArea: tiene('area'),
+    hasUser: tiene('user'), hasEos: rows.some(r => r.eos),
+    hasTime: fechas.length > 0,
+    minDate: fechas.length ? new Date(vMin(fechas)) : null,
+    maxDate: fechas.length ? new Date(vMax(fechas)) : null
   });
   return M;
 }
 
+/** Compatibilidad: la carga inicial reemplaza, no acumula. */
+function buildModel(grid, fileName, sheet) { return addSource(grid, fileName, sheet, true); }
 /* ============================================================================
    6. AGREGACION
    ========================================================================== */
 function inc(map, k, v) { map.set(k, (map.get(k) || 0) + (v == null ? 1 : v)); }
-function addTo(map, k, v) { let s = map.get(k); if (!s) map.set(k, s = new Set()); s.add(v); }
+/** Conjunto contable. Con detalle guarda identificadores de equipo; con datos
+ *  agregados solo acumula el recuento. `.size` responde igual en ambos casos,
+ *  asi que el resto de la agregacion no necesita saber de que modo viene. */
+function CSet() { this.s = null; this.n = 0; }
+CSet.prototype.add = function (dev, w) {
+  if (dev) { if (!this.s) this.s = new Set(); this.s.add(dev); }
+  else this.n += (w || 1);
+};
+CSet.prototype.has = function (d) { return !!this.s && this.s.has(d); };
+CSet.prototype.forEach = function (f) { if (this.s) this.s.forEach(f); };
+Object.defineProperty(CSet.prototype, 'size', { get() { return (this.s ? this.s.size : 0) + this.n; } });
+function addTo(map, k, dev, w) { let s = map.get(k); if (!s) map.set(k, s = new CSet()); s.add(dev, w); }
 const sortDesc = m => Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
 const sizeDesc = m => Array.from(m.entries()).map(([k, s]) => [k, s.size]).sort((a, b) => b[1] - a[1]);
 
 function aggregate(rows) {
   const A = {
     n: rows.length,
-    devSet: new Set(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
+    devSet: new CSet(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
     appMeta: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
     appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
     dayDev: new Map(), bucketDev: new Map(), devApps: new Map(), devLast: new Map(),
-    cpeYes: 0, cpeNo: 0, vendorRows: new Map(), userSet: new Set()
+    cpeYes: 0, cpeNo: 0, eosRows: 0, vendorRows: new Map(), userSet: new Set()
   };
   for (const r of rows) {
-    A.devSet.add(r.device);
-    addTo(A.vendorDev, r.vendor, r.device);
-    inc(A.vendorRows, r.vendor);
-    addTo(A.appDev, r.appKey, r.device);
+    const w = r.w || 1;
+    if (r.device) A.devSet.add(r.device);
+    addTo(A.vendorDev, r.vendor, r.device, w);
+    inc(A.vendorRows, r.vendor, w);
+    addTo(A.appDev, r.appKey, r.device, w);
     addTo(A.appVers, r.appKey, r.ver);
     if (!A.appMeta.has(r.appKey)) A.appMeta.set(r.appKey, { vendor: r.vendor, app: r.app });
-    addTo(A.devApps, r.device, r.appKey);
-    addTo(A.osDev, r.osver, r.device);
-    if (r.geo) addTo(A.geoDev, r.geo, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device);
-    if (r.area) addTo(A.areaDev, r.area, r.device);
-    if (r.day) addTo(A.dayDev, r.day, r.device);
-    addTo(A.bucketDev, r.bucket, r.device);
+    if (r.device) addTo(A.devApps, r.device, r.appKey);
+    addTo(A.osDev, r.osver, r.device, w);
+    if (r.geo) addTo(A.geoDev, r.geo, r.device, w);
+    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device, w);
+    if (r.area) addTo(A.areaDev, r.area, r.device, w);
+    if (r.day) addTo(A.dayDev, r.day, r.device, w);
+    addTo(A.bucketDev, r.bucket, r.device, w);
     if (r.user) A.userSet.add(r.user);
-    r.cpe ? A.cpeYes++ : A.cpeNo++;
+    if (r.eosBad) A.eosRows += w;
+    r.cpe ? A.cpeYes += w : A.cpeNo += w;
     if (r.ts) { const p = A.devLast.get(r.device); if (!p || r.ts > p) A.devLast.set(r.device, r.ts); }
     // cobertura app x versionSO
     let mm = A.verOsDev.get(r.appKey); if (!mm) A.verOsDev.set(r.appKey, mm = new Map());
-    addTo(mm, r.osver, r.device);
+    addTo(mm, r.osver, r.device, w);
     // reparto de versiones dentro de cada app
     let vv = A.appVerDev.get(r.appKey); if (!vv) A.appVerDev.set(r.appKey, vv = new Map());
-    addTo(vv, r.ver, r.device);
+    addTo(vv, r.ver, r.device, w);
   }
   A.nDev = A.devSet.size;
+  A.nDevEstimado = false;
+  // El archivo de parque es el censo: manda sobre los equipos que aparezcan en
+  // las filas de detalle, que solo cubren las aplicaciones exportadas enteras.
+  // Con un filtro activo mandan las filas, porque el censo no se puede filtrar.
+  if (typeof M !== 'undefined' && M.devInfo && M.devInfo.size &&
+      rows.length === M.rows.length && M.devInfo.size > A.nDev) A.nDev = M.devInfo.size;
+  if (!A.nDev && typeof M !== 'undefined') {
+    if (M.devInfo && M.devInfo.size) A.nDev = M.devInfo.size;
+    else {
+      // sin detalle ni parque no se puede saber cuantos equipos hay; la app con
+      // mas cobertura da una cota inferior, y se marca como tal
+      let mx = 0; A.appDev.forEach(s => { if (s.size > mx) mx = s.size; });
+      A.nDev = mx; A.nDevEstimado = mx > 0;
+    }
+  }
   A.nApp = A.appDev.size;
   A.nVendor = A.vendorDev.size;
   A.topVendors = sizeDesc(A.vendorDev);
@@ -1121,7 +1290,9 @@ function aggregate(rows) {
   A.frag = Array.from(A.appVers.entries())
     .map(([k, s]) => [k, s.size, (A.appDev.get(k) || new Set()).size])
     .filter(x => x[1] > 1).sort((a, b) => b[1] - a[1] || b[2] - a[2]);
-  A.avgApps = A.nDev ? Array.from(A.devApps.values()).reduce((s, x) => s + x.size, 0) / A.nDev : 0;
+  A.avgApps = A.devApps.size
+    ? Array.from(A.devApps.values()).reduce((s, x) => s + x.size, 0) / A.devApps.size
+    : (A.nDev ? Array.from(A.appDev.values()).reduce((s, x) => s + x.size, 0) / A.nDev : 0);
   A.days = Array.from(A.dayDev.entries()).map(([k, s]) => [k, s.size]).sort((a, b) => a[0] < b[0] ? -1 : 1);
   A.buckets = BUCKETS.map(b => [b[2], (A.bucketDev.get(b[2]) || new Set()).size]);
 
@@ -1132,14 +1303,14 @@ function aggregate(rows) {
     A.pairs += all.size;
     const latest = M.latestVer ? M.latestVer.get(k) : undefined;
     if (latest === undefined) { A.unknownVer += all.size; return; }   // sin version comparable
-    const cur = vm.get(latest) || new Set();
-    A.upToDate += cur.size;
-    const behind = [];
-    all.forEach(d => { if (!cur.has(d)) behind.push(d); });
-    if (behind.length) {
-      A.debt.push({ key: k, behind: behind.length, total: all.size, latest, nver: vm.size });
-      A.debtTotal += behind.length;
-      for (const d of behind) inc(A.devLag, d);
+    const cur = vm.get(latest);
+    const curN = cur ? cur.size : 0;
+    A.upToDate += curN;
+    const behindN = all.size - curN;                 // funciona con detalle y con agregado
+    if (behindN > 0) {
+      A.debt.push({ key: k, behind: behindN, total: all.size, latest, nver: vm.size });
+      A.debtTotal += behindN;
+      all.forEach(d => { if (!cur || !cur.has(d)) inc(A.devLag, d); });
     }
   });
   A.debt.sort((a, b) => b.behind - a.behind || b.total - a.total);
@@ -1786,9 +1957,18 @@ function computeCompliance(rows) {
   CMP.rowState = new Map(); CMP.dev = new Map(); CMP.app = new Map(); CMP.stale = new Set();
   const best = new Map();                        // device|app -> version mas alta
   for (const r of rows) {
+    if (!r.device) continue;                     // fila agregada: no hay equipo al que atribuirla
     const id = r.device + ' ' + r.appKey;
     const p = best.get(id);
     if (!p || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) best.set(id, r.ver);
+  }
+  // filas agregadas: no hay equipo al que atribuir, se pesan por recuento
+  const aggApp = new Map();
+  for (const r of rows) {
+    if (r.device) continue;
+    let a = aggApp.get(r.appKey);
+    if (!a) aggApp.set(r.appKey, a = { ok: 0, warn: 0, bad: 0, na: 0 });
+    a[evalVer(r.appKey, r.ver)] += (r.w || 1);
   }
   const pairApp = new Map();                     // appKey -> Map(device -> estado)
   best.forEach((ver, id) => {
@@ -1806,13 +1986,19 @@ function computeCompliance(rows) {
   // estado por fila, para poder filtrar por cumplimiento
   for (const r of rows) {
     const am = pairApp.get(r.appKey);
-    CMP.rowState.set(r, EST_LAB[(am && am.get(r.device)) || 'na']);
+    CMP.rowState.set(r, r.device
+      ? EST_LAB[(am && am.get(r.device)) || 'na']
+      : EST_LAB[evalVer(r.appKey, r.ver)]);
     if (r.ts) { const d = CMP.dev.get(r.device); if (d && (!d.last || r.ts > d.last)) d.last = r.ts; }
   }
-  // resumen por aplicacion
-  pairApp.forEach((am, k) => {
-    const o = { ok: 0, warn: 0, bad: 0, na: 0, total: am.size, key: k };
-    am.forEach(st => o[st]++);
+  // resumen por aplicacion: detalle y agregado suman en la misma ficha
+  const claves = new Set(Array.from(pairApp.keys()).concat(Array.from(aggApp.keys())));
+  claves.forEach(k => {
+    const am = pairApp.get(k), ag = aggApp.get(k);
+    const o = { ok: 0, warn: 0, bad: 0, na: 0, total: 0, key: k };
+    if (am) am.forEach(st => o[st]++);
+    if (ag) { o.ok += ag.ok; o.warn += ag.warn; o.bad += ag.bad; o.na += ag.na; }
+    o.total = o.ok + o.warn + o.bad + o.na;
     o.estado = o.bad ? 'bad' : o.warn ? 'warn' : o.ok ? 'ok' : 'na';
     o.pctOk = pct(o.ok, o.total);
     const r = rule(k) || {};
@@ -1832,6 +2018,19 @@ function computeCompliance(rows) {
     tot[d.estado]++;
   });
   tot.n = CMP.dev.size;
+  tot.base = 'equipos';
+  // Sin detalle por equipo no se puede decir "este equipo cumple": se mide sobre
+  // instalaciones, que es lo que el archivo agregado si permite afirmar.
+  // Con cualquier fuente agregada, el titular sale de las instalaciones: el
+  // detalle por equipo solo cubre las aplicaciones que se exportaron enteras,
+  // y mezclar ambas bases daria dos porcentajes distintos del mismo parque.
+  if ((!CMP.dev.size || (typeof M !== 'undefined' && M.hasAgregado)) && CMP.app.size) {
+    let ok = 0, warn = 0, bad = 0;
+    CMP.app.forEach((o, k) => { if (!inScope(k)) return; ok += o.ok; warn += o.warn; bad += o.bad; });
+    tot.ok = ok; tot.warn = warn; tot.bad = bad;
+    tot.n = ok + warn + bad;
+    tot.base = 'instalaciones';
+  }
   tot.pctOk = pct(tot.ok, tot.n);
   CMP.scope = new Set();
   CMP.app.forEach((o, k) => { if (inScope(k)) CMP.scope.add(k); });
@@ -2084,6 +2283,37 @@ function trendMulti(labels, series, o) {
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || 'Tendencia')}">${s}</svg>` + leg;
 }
 
+/**
+ * Aviso de archivo cortado. La consola limita las filas por exportacion; si la
+ * consulta ademas lleva `sort by`, el corte cae siempre en el mismo tramo y el
+ * analisis sale sesgado sin que nada lo indique.
+ */
+function avisoFuentes() {
+  const cortadas = M.sources.filter(s => s.truncado && s.truncado.length);
+  let h = '';
+  if (cortadas.length) {
+    h += `<div class="alert crit" style="margin-top:14px"><div class="alert-ic">${ico('alert')}</div>
+      <div class="alert-b"><div class="alert-t">Una exportación parece estar cortada</div>
+      <div class="alert-d">` + cortadas.map(s =>
+        `<b>${esc(s.name)}</b>: ${s.truncado.join('; ')}.`).join('<br>') +
+      `<br>Si tu consulta termina en <code>sort by</code>, el recorte cae siempre en el mismo tramo
+       y lo que ves es una muestra sesgada, no el parque. Quita el <code>sort</code> y reparte la
+       consulta en lotes con <code>hash(DeviceId, N)</code>, o usa una consulta agregada.</div>
+      <button class="alert-a" data-go="admin">Ver cómo consultar por lotes</button></div></div>`;
+  }
+  if (M.mode !== 'detalle') {
+    const agr = M.sources.filter(s => s.shape === 'agregado').length;
+    h += `<div class="banner" style="margin-top:14px">${ico('info')}<div>
+      <b>Datos agregados.</b> ${agr} archivo${agr > 1 ? 's' : ''} sin detalle por equipo:
+      el catálogo, las versiones y el cumplimiento se calculan sobre recuentos.
+      ${CMP.tot.base === 'instalaciones'
+        ? 'Sin ninguna fuente con detalle, el cumplimiento se mide sobre <b>instalaciones</b>, no sobre equipos.'
+        : 'Las vistas por equipo solo muestran los equipos que sí traen detalle.'}
+    </div></div>`;
+  }
+  return h;
+}
+
 /* ============================================================================
    15. VISTA · RESUMEN EJECUTIVO (administrador)
    ========================================================================== */
@@ -2102,10 +2332,12 @@ function vResumen(A, rows) {
     kpi({ ic:'grid', label:'Aplicaciones detectadas', value: fmt(A.nApp), go:'aplicaciones',
       sub:`De <b>${fmt(A.nVendor)}</b> fabricantes` }),
     kpi({ ic:'shieldOk', label:'Cumplimiento', value: fmt1(t.pctOk) + ' %', meter: t.pctOk, st: stOf(t.pctOk), go:'cumplimiento',
-      sub: `<b>${fmt(t.ok)}</b> de ${fmt(t.n)} equipos · medido sobre <b>${fmt(t.scope)}</b> apps bajo estándar` +
+      sub: `<b>${fmt(t.ok)}</b> de ${fmt(t.n)} ${t.base} · medido sobre <b>${fmt(t.scope)}</b> apps bajo estándar` +
         (p ? ` · ${delta(t.pctOk, p.k.pctOk, true, ' pts')}` : '') }),
-    kpi({ ic:'alert', label:'Equipos fuera de cumplimiento', value: fmt(t.bad), st: t.bad ? 'crit' : 'ok', go:'cumplimiento',
-      sub: p ? `${delta(t.bad, p.k.bad, false)} desde ${p.fecha}` : `<b>${fmt(t.warn)}</b> más requieren atención` }),
+    kpi({ ic:'alert', label: t.base === 'equipos' ? 'Equipos fuera de cumplimiento' : 'Instalaciones que no cumplen',
+      value: fmt(t.bad), st: t.bad ? 'crit' : 'ok', go:'cumplimiento',
+      sub: `<b>${fmt(t.warn)}</b> más requieren atención` +
+        (p && t.base === 'equipos' ? ` · ${delta(t.bad, p.k.bad, false)} desde ${p.fecha}` : '') }),
     kpi({ ic:'fork', label:'Apps que requieren actualización', value: fmt(needUpd), st: needUpd ? 'warn' : 'ok', go:'versiones',
       sub:`<b>${fmt(A.debtTotal)}</b> instalaciones por detrás` }),
     kpi({ ic:'layers', label:'Equipos con software desactualizado', value: fmt(A.devLag.size),
@@ -2122,17 +2354,19 @@ function vResumen(A, rows) {
       sub:`Más de <b>${CFG.params.syncDias}</b> días sin reportar` })
   ];
 
+  const uni = t.base === 'equipos' ? 'Equipos' : 'Instalaciones';
   const dn = donut([
     ['Cumplen', t.ok, 'cumpl', 'Cumple'],
     ['Requieren atención', t.warn, 'cumpl', 'Requiere atención'],
     ['No cumplen', t.bad, 'cumpl', 'No cumple']
-  ].filter(d => d[1] > 0), { colors:['var(--ok)','var(--warn)','var(--crit)'], centerL:'Equipos',
-    centerV: t.n, unit:'Equipos', aria:'Estado de cumplimiento del parque' });
+  ].filter(d => d[1] > 0), { colors:['var(--ok)','var(--warn)','var(--crit)'], centerL: uni,
+    centerV: t.n, unit: uni, aria:'Estado de cumplimiento del parque' });
 
   const riesgo = CMP.appList.filter(o => o.riesgo > 0).slice(0, 10);
   const topInst = A.topApps.slice(0, 10).map(([k, v]) => [appLabel(k), v, 'appKey', k]);
 
   return viewHead('Resumen', 'Estado general del parque de software sobre la selección activa.') +
+    avisoFuentes() +
     `<div class="grid kpis" style="margin-top:14px">${kpis.join('')}</div>` +
     sec('Dónde intervenir primero', 'Riesgo = equipos incumplidores, ponderado por criticidad de la aplicación') +
     `<div class="gwide">` +
@@ -2206,12 +2440,12 @@ function vCumplimiento(A, rows) {
       : ' —las administradas, las críticas y las no permitidas—. El resto del inventario se muestra pero no puntúa.') +
     ` Puedes ampliar el alcance en Administración.`) +
     `<div class="grid kpis" style="margin-top:14px">
-      ${kpi({ ic:'shieldOk', label:'Equipos que cumplen', value: fmt(t.ok), st:'ok', meter: pct(t.ok,t.n),
-        sub:`<b>${fmt1(t.pctOk)} %</b> del parque` })}
+      ${kpi({ ic:'shieldOk', label: t.base === 'equipos' ? 'Equipos que cumplen' : 'Instalaciones al día',
+        value: fmt(t.ok), st:'ok', meter: pct(t.ok,t.n), sub:`<b>${fmt1(t.pctOk)} %</b> del total evaluado` })}
       ${kpi({ ic:'alert', label:'Requieren atención', value: fmt(t.warn), st:'warn', meter: pct(t.warn,t.n),
         sub:'Por debajo de la versión aprobada pero sobre la mínima' })}
       ${kpi({ ic:'ban', label:'No cumplen', value: fmt(t.bad), st:'crit', meter: pct(t.bad,t.n),
-        sub:'Bajo la versión mínima o con software no permitido' })}
+        sub:`Bajo la versión mínima o no permitido · medido en <b>${esc(t.base)}</b>` })}
       ${kpi({ ic:'cog', label:'Sin estándar definido', value: fmt(A.topApps.filter(([k]) => !rule(k)).length),
         go:'admin', sub:'Aplicaciones que aún no puntúan en el cálculo' })}
     </div>` +
@@ -3295,6 +3529,14 @@ document.addEventListener('click', async e => {
     } return;
   }
   if ((el = cl('[data-adm]'))) { await admAction(el.getAttribute('data-adm')); return; }
+  if ((el = cl('[data-load]'))) {
+    const modo = el.getAttribute('data-load');
+    $$('.expmenu').forEach(m => m.remove());
+    if (modo === 'add') { $('#fileInput').dataset.add = '1'; $('#fileInput').value = ''; $('#fileInput').click(); }
+    else { $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
+           $('#fileInput').value = ''; $('#dropErr').classList.remove('on'); }
+    return;
+  }
   if (t.id === 'btnExport') { toggleExportMenu(t); return; }
   if ((el = cl('[data-exp]'))) { await doExport(el.getAttribute('data-exp')); return; }
   $$('.expmenu').forEach(m => m.remove());
@@ -3427,9 +3669,25 @@ $('#btnPrint').addEventListener('click', () => {
   if (S.mode === 'cliente' && S.view !== 'informe') go('informe');
   setTimeout(() => window.print(), 120);
 });
+/* Cargar: anadir al conjunto actual o empezar de cero. */
 $('#btnNew').addEventListener('click', () => {
-  $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
-  $('#fileInput').value = ''; $('#dropErr').classList.remove('on');
+  const ex = $('.expmenu'); if (ex) { ex.remove(); return; }
+  const r = $('#btnNew').getBoundingClientRect();
+  const m = document.createElement('div');
+  m.className = 'expmenu';
+  m.style.cssText = `position:fixed;z-index:210;top:${r.bottom + 7}px;right:${Math.max(8, innerWidth - r.right)}px;
+    background:#0E0E0E;border:1px solid var(--line);border-radius:11px;padding:5px;min-width:250px;
+    box-shadow:0 14px 40px rgba(0,0,0,.7);display:flex;flex-direction:column;gap:2px`;
+  m.innerHTML = `
+    <button data-load="add" style="text-align:left;padding:9px 12px;border-radius:8px;font-size:12.5px">
+      <b style="display:block;color:var(--ink)">Añadir archivo</b>
+      <span class="mini">Se funde con lo ya cargado (lotes, parque, catálogo)</span></button>
+    <button data-load="new" style="text-align:left;padding:9px 12px;border-radius:8px;font-size:12.5px">
+      <b style="display:block;color:var(--ink)">Empezar de cero</b>
+      <span class="mini">Descarta lo cargado y abre la pantalla inicial</span></button>`;
+  document.body.appendChild(m);
+  $$('.expmenu button').forEach(b => { b.onmouseenter = () => b.style.background = 'var(--surface-2)';
+    b.onmouseleave = () => b.style.background = ''; });
 });
 
 /* ============================================================================
@@ -3441,7 +3699,8 @@ function fail(msg) {
   dropErr.classList.add('on');
   $('#dropScreen').hidden = false; $('#app').hidden = true; $('#topActions').hidden = true;
 }
-async function loadFile(file) {
+/** `añadir` funde el archivo con lo ya cargado; si no, empieza de cero. */
+async function loadFile(file, añadir) {
   if (!file) return;
   dropErr.classList.remove('on'); dropCard.classList.remove('hot');
   const name = file.name || 'archivo';
@@ -3452,15 +3711,17 @@ async function loadFile(file) {
     if (u8[0] === 0x50 && u8[1] === 0x4B) { const r = await readXlsx(buf); grid = r.rows; sheet = r.sheet; }
     else if (u8[0] === 0xD0 && u8[1] === 0xCF) throw new Error('Es un Excel antiguo (.xls). Ábrelo en Excel y guárdalo como .xlsx o .csv.');
     else grid = parseCsv(decodeText(buf));
-    buildModel(grid, name, sheet);
+    const src = addSource(grid, name, sheet, !añadir);
     M.aggFull = aggregate(M.rows);
     M.effVer = effVersions(M.rows);
     seedCatalog();
     histSnapshot();
-    S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {};
+    if (!añadir) { S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {}; }
+    if (añadir) toast(`Añadido: ${truncate(name, 24)} · ${fmt(src.filas)} filas (${src.shape})`);
     $('#qGlobal').value = '';
-    $('#fileName').textContent = truncate(name, 30);
-    $('#fileName').title = name + (sheet ? ' · hoja ' + sheet : '');
+    $('#fileName').textContent = M.sources.length > 1
+      ? M.sources.length + ' archivos' : truncate(name, 26);
+    $('#fileName').title = M.sources.map(s => s.name + ' (' + s.shape + ', ' + fmt(s.filas) + ')').join('\n');
     $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
     document.title = (CFG.org ? CFG.org + ' · ' : '') + 'Inventario de Aplicaciones';
     readHash();
@@ -3469,7 +3730,11 @@ async function loadFile(file) {
   } catch (err) { console.error(err); fail(err && err.message ? err.message : String(err)); }
 }
 $('#btnPick').addEventListener('click', () => $('#fileInput').click());
-$('#fileInput').addEventListener('change', e => loadFile(e.target.files[0]));
+$('#fileInput').addEventListener('change', e => {
+  const add = $('#fileInput').dataset.add === '1';
+  $('#fileInput').dataset.add = '';
+  for (const f of e.target.files) loadFile(f, add || (!$('#app').hidden && f !== e.target.files[0]));
+});
 dropCard.addEventListener('click', e => { if (e.target === dropCard) $('#fileInput').click(); });
 ['dragenter', 'dragover'].forEach(ev => window.addEventListener(ev, e => {
   e.preventDefault(); if ($('#dropScreen').hidden) return; dropCard.classList.add('hot');
@@ -3479,11 +3744,12 @@ dropCard.addEventListener('click', e => { if (e.target === dropCard) $('#fileInp
   if (ev === 'dragleave' && e.relatedTarget) return;
   dropCard.classList.remove('hot');
 }));
-window.addEventListener('drop', e => {
+window.addEventListener('drop', async e => {
   e.preventDefault();
-  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if (!f) return;
-  if (!$('#dropScreen').hidden || confirm('¿Reemplazar el inventario cargado por «' + f.name + '»?')) loadFile(f);
+  const fs = e.dataTransfer && e.dataTransfer.files;
+  if (!fs || !fs.length) return;
+  const primeraCarga = !$('#dropScreen').hidden;
+  for (let i = 0; i < fs.length; i++) await loadFile(fs[i], !(primeraCarga && i === 0));
 });
 
 /* arranque */
