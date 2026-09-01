@@ -349,6 +349,7 @@ async function traerDeDefender(cuales, lotes) {
    ------------------------------------------------------------------------ */
 function scriptPowerShell(lotes, propia) {
   const q = s => String(s).replace(/\r/g, '');
+  const g = CFG.graph || {};
   const bloques = [
     ['parque',      'Parque de equipos',  kqlParque()],
     ['catalogo',    'Catalogo agregado',  kqlCatalogo()],
@@ -368,9 +369,7 @@ Exportar -Nombre '${id}' -Titulo '${titulo}' -Kql $kql
     cuerpo += `
 # ------------------------------------------------- Detalle completo por lotes
 for ($i = 0; $i -lt ${lotes}; $i++) {
-    $kql = @"
-$(Plantilla -Lote $i)
-"@
+    $kql = Plantilla -Lote $i
     Exportar -Nombre "detalle_$i" -Titulo "Detalle lote $($i + 1)/${lotes}" -Kql $kql
 }
 `;
@@ -379,35 +378,102 @@ $(Plantilla -Lote $i)
 function Plantilla {
     param([int]$Lote)
     $t = @'
-${q(kqlDetalle(0, lotes)).replace(/\$/g, '$$$$')}
+${q(kqlDetalle(0, lotes))}
 '@
     return $t -replace 'hash\\(DeviceId, ${lotes}\\) == 0', "hash(DeviceId, ${lotes}) == $Lote"
 }
 ` : '';
 
-  return `<#
-    Inventario de Aplicaciones - extraccion desde Microsoft Defender
-    Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
+  /* ---- autenticacion ---- */
+  const authRest = `
+# --- Autenticacion por codigo de dispositivo, SIN MODULO ---------------------
+# Microsoft.Graph.Authentication v2 falla al cargarse en Windows PowerShell 5.1
+# con un TypeLoadException: sus ensamblados apuntan a .NET moderno. Aqui se
+# habla directamente con el endpoint de OAuth, asi que no hace falta el modulo
+# ni PowerShell 7.
+$Client = '${kqlEsc(g.clientId || '')}'
+$Tenant = '${kqlEsc(g.tenantId || '')}'
+$Scope  = 'https://graph.microsoft.com/ThreatHunting.Read.All offline_access'
+if (-not $Client -or -not $Tenant) { throw 'Faltan el Application ID y el Directory ID. Rellenalos en Origen de datos y vuelve a descargar el script.' }
 
-    NO registra ninguna aplicacion en Entra ID. Usa el modulo oficial de
-    Microsoft, que trae su propio registro, e inicia sesion con TU cuenta.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$base = "https://login.microsoftonline.com/$Tenant/oauth2/v2.0"
 
-    Uso:
-      1. Abre PowerShell (no hace falta como administrador).
-      2. Ejecuta:  .\\extraer-defender.ps1
-      3. Inicia sesion en la ventana que se abre.
-      4. Arrastra los CSV de la carpeta 'salida' al tablero, todos a la vez.
+Write-Host 'Solicitando codigo de inicio de sesion...' -ForegroundColor Cyan
+$dc = Invoke-RestMethod -Method POST -Uri "$base/devicecode" -Body @{ client_id = $Client; scope = $Scope }
+Write-Host ''
+Write-Host '  ------------------------------------------------------------'
+Write-Host ("  Abre  {0}" -f $dc.verification_uri) -ForegroundColor Yellow
+Write-Host ("  Codigo: {0}" -f $dc.user_code) -ForegroundColor Yellow
+Write-Host '  ------------------------------------------------------------'
+Write-Host ''
+try { Start-Process $dc.verification_uri } catch { }
 
-    Si es la primera vez, un administrador debe consentir el permiso
-    ThreatHunting.Read.All para Microsoft Graph PowerShell. El propio dialogo
-    de inicio de sesion ofrece el boton de consentimiento.
-#>
+$tok = $null
+$limite = (Get-Date).AddSeconds([int]$dc.expires_in)
+$espera = [Math]::Max(5, [int]$dc.interval)
+while (-not $tok -and (Get-Date) -lt $limite) {
+    Start-Sleep -Seconds $espera
+    try {
+        $tok = Invoke-RestMethod -Method POST -Uri "$base/token" -Body @{
+            client_id   = $Client
+            grant_type  = 'urn:ietf:params:oauth:grant-type:device_code'
+            device_code = $dc.device_code
+        }
+    } catch {
+        $detalle = ''
+        try { $detalle = ($_.ErrorDetails.Message | ConvertFrom-Json).error } catch { }
+        if ($detalle -eq 'slow_down') { $espera += 5 }
+        elseif ($detalle -ne 'authorization_pending') {
+            $msg = ''
+            try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error_description } catch { $msg = $_.Exception.Message }
+            throw $msg
+        }
+    }
+}
+if (-not $tok) { throw 'Se agoto el tiempo de espera del inicio de sesion.' }
+$Token = $tok.access_token
+Write-Host 'Sesion iniciada correctamente.' -ForegroundColor Green
 
-$ErrorActionPreference = 'Stop'
-$Salida = Join-Path $PSScriptRoot 'salida'
-if (-not (Test-Path $Salida)) { New-Item -ItemType Directory -Path $Salida | Out-Null }
+function Exportar {
+    param([string]$Nombre, [string]$Titulo, [string]$Kql)
+    Write-Host ("-> {0}: consultando..." -f $Titulo) -NoNewline
+    try {
+        $resp = Invoke-RestMethod -Method POST \`
+            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' \`
+            -Headers @{ Authorization = "Bearer $Token" } \`
+            -ContentType 'application/json' \`
+            -Body (@{ Query = $Kql } | ConvertTo-Json -Depth 4 -Compress)
+    } catch {
+        Write-Host ''
+        $msg = $_.Exception.Message
+        try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error.message } catch { }
+        Write-Host ("   ERROR: {0}" -f $msg) -ForegroundColor Red
+        return
+    }
+    $filas = $resp.results
+    if (-not $filas -or $filas.Count -eq 0) { Write-Host ' sin filas' -ForegroundColor DarkYellow; return }
+    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
+    $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
+    Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
+}
+`;
 
-# --- modulo: solo el de autenticacion, que es el ligero ---------------------
+  const authModulo = `
+# --- Autenticacion con el modulo oficial de Microsoft ------------------------
+# Aviso: Microsoft.Graph.Authentication v2 suele fallar en Windows PowerShell 5.1
+# con TypeLoadException. Si ocurre, usa PowerShell 7 (pwsh) o marca en el tablero
+# "Usar mi propio registro", que genera una version sin modulo.
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    Write-Host ''
+    Write-Host 'AVISO: estas en Windows PowerShell ' -NoNewline -ForegroundColor Yellow
+    Write-Host $PSVersionTable.PSVersion -ForegroundColor Yellow
+    Write-Host 'El modulo de Microsoft esta pensado para PowerShell 7. Si falla al importarse:' -ForegroundColor Yellow
+    Write-Host '  1) Instala PowerShell 7:  winget install Microsoft.PowerShell' -ForegroundColor Yellow
+    Write-Host '     y vuelve a ejecutar este script con  pwsh' -ForegroundColor Yellow
+    Write-Host '  2) O marca "Usar mi propio registro" en el tablero: no usa modulo.' -ForegroundColor Yellow
+    Write-Host ''
+}
 if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
     Write-Host 'Instalando Microsoft.Graph.Authentication para el usuario actual...' -ForegroundColor Yellow
     Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
@@ -415,22 +481,7 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
 Import-Module Microsoft.Graph.Authentication
 
 Write-Host 'Iniciando sesion...' -ForegroundColor Cyan
-${propia ? `# Registro propio con flujo de codigo de dispositivo: NO usa URI de
-# redireccion, asi que sirve cuando la organizacion no permite anadirlas.
-# La aplicacion debe tener Authentication > Allow public client flows = Yes.
-$conexion = @{
-    ClientId = '${kqlEsc((CFG.graph || {}).clientId || '')}'
-    TenantId = '${kqlEsc((CFG.graph || {}).tenantId || '')}'
-    Scopes   = 'ThreatHunting.Read.All'
-    NoWelcome = $true
-}
-# El nombre del parametro cambio entre versiones del modulo
-$p = (Get-Command Connect-MgGraph).Parameters
-if     ($p.ContainsKey('UseDeviceCode'))           { $conexion.UseDeviceCode = $true }
-elseif ($p.ContainsKey('UseDeviceAuthentication')) { $conexion.UseDeviceAuthentication = $true }
-Write-Host 'Se abrira una pagina para que escribas el codigo que aparezca abajo.' -ForegroundColor Yellow
-Connect-MgGraph @conexion` :
-`Connect-MgGraph -Scopes 'ThreatHunting.Read.All' -NoWelcome`}
+Connect-MgGraph -Scopes 'ThreatHunting.Read.All' -NoWelcome
 $ctx = Get-MgContext
 Write-Host ("Conectado como {0} en {1}" -f $ctx.Account, $ctx.TenantId) -ForegroundColor Green
 
@@ -453,12 +504,30 @@ function Exportar {
     $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
     Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
 }
-${plantilla}${cuerpo}
+`;
+
+  return `<#
+    Inventario de Aplicaciones - extraccion desde Microsoft Defender
+    Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
+    Modo: ${propia ? 'registro propio, sin modulo (funciona en PowerShell 5.1)'
+                   : 'modulo oficial de Microsoft (recomendado PowerShell 7)'}
+
+    Uso:
+      1. Abre PowerShell (no hace falta como administrador).
+      2. Ejecuta:  .\\extraer-defender.ps1
+      3. Inicia sesion cuando te lo pida.
+      4. Arrastra los CSV de la carpeta 'salida' al tablero, todos a la vez.
+#>
+
+$ErrorActionPreference = 'Stop'
+$Salida = Join-Path $PSScriptRoot 'salida'
+if (-not $Salida) { $Salida = Join-Path (Get-Location) 'salida' }
+if (-not (Test-Path $Salida)) { New-Item -ItemType Directory -Path $Salida | Out-Null }
+${propia ? authRest : authModulo}${plantilla}${cuerpo}
 Write-Host ''
 Write-Host ("Listo. Archivos en: {0}" -f $Salida) -ForegroundColor Cyan
 Write-Host 'Arrastralos TODOS a la vez sobre el tablero: se funden en un solo modelo.' -ForegroundColor Cyan
-Disconnect-MgGraph | Out-Null
-`;
+${propia ? '' : 'Disconnect-MgGraph | Out-Null\n'}`;
 }
 
 /* ---- 24.4 vista --------------------------------------------------------- */
@@ -565,11 +634,12 @@ function vDatos(A, rows) {
           carpeta <code>salida</code>, que arrastras aquí de una vez.</p>
           <label class="chk" style="margin-bottom:12px">
             <input type="checkbox" id="psPropia"${(CFG.graph || {}).clientId ? '' : ' disabled'}>
-            Usar mi propio registro de aplicación${(CFG.graph || {}).clientId ? '' : ' (rellena antes los identificadores abajo)'}
+            Usar mi propio registro, sin módulo${(CFG.graph || {}).clientId ? '' : ' (rellena antes los identificadores abajo)'}
           </label>
-          <p class="mini" style="margin:-6px 0 12px">Con código de dispositivo: <b>no usa URI de redirección</b>,
-            así que sirve aunque tu organización no permita añadirlas. La app necesita
-            <i>Authentication → Allow public client flows → Yes</i>.</p>
+          <p class="mini" style="margin:-6px 0 12px">Habla directamente con OAuth: <b>no instala ningún módulo</b>
+            y <b>no usa URI de redirección</b>. Es la opción que funciona en Windows PowerShell 5.1, donde
+            <code>Microsoft.Graph.Authentication</code> falla con <i>TypeLoadException</i>.
+            La app necesita <i>Authentication → Allow public client flows → Yes</i>.</p>
           <div class="fld"><label for="psLotes">Lotes del detalle completo (0 = no traerlo)</label>
             <input id="psLotes" type="number" min="0" max="64" value="0">
             <span class="hint">Solo si necesitas el inventario crudo. Con tu parque son ~1,3 millones de filas:
