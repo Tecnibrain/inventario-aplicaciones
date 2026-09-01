@@ -105,19 +105,46 @@ Cliente imprime el informe ejecutivo.
 
 ---
 
-## Integración con Microsoft Intune
+## Conexión con Microsoft Defender
 
-Hoy la fuente de datos es un archivo exportado. La capa de lectura está aislada del resto: el
-modelo interno (equipos, aplicaciones, versiones, fechas) es el mismo que produciría Microsoft
-Graph.
+La fuente es **Microsoft Defender** (Advanced Hunting, tablas `DeviceInfo` y
+`DeviceTvmSoftwareInventory`), por archivo exportado o por consulta directa.
 
-**Conectar Graph en vivo requiere un backend.** Graph exige un *client secret* o un certificado,
-y eso no puede vivir en una página: cualquiera que la abriese tendría la credencial. El backend
-autentica contra Entra ID, consulta `deviceManagement/detectedApps` y `managedDevices`, y
-entrega el mismo modelo que hoy produce el lector de archivos.
+### Por archivo
 
-El estándar, el motor de cumplimiento, el histórico y todas las vistas son independientes del
-origen de los datos. Al conectar Graph no cambia nada de eso.
+La consola limita las filas por exportación, así que un parque grande no cabe en una descarga.
+La vista **Origen de datos** genera tres consultas que sí caben y que se fusionan entre sí:
+parque, catálogo agregado y excepciones. La de excepciones lleva tu estándar dentro, como un
+`datatable`, y solo baja lo que incumple.
+
+Si tu consulta termina en `sort by`, el recorte cae siempre en el mismo tramo del alfabeto y el
+análisis sale sesgado. La aplicación detecta ese caso y avisa.
+
+### Por conexión directa
+
+Con un **registro de aplicación** en Entra ID (cinco minutos, sin secreto) la página inicia
+sesión con tu cuenta y consulta `security/runHuntingQuery` ella misma.
+
+1. Entra ID → App registrations → New registration.
+2. Plataforma **Single-page application**, con la URI de redirección que muestra la aplicación.
+3. Permiso **delegado** de Graph `ThreatHunting.Read.All`, con consentimiento de administrador.
+4. Pega el *Application (client) ID* y el *Directory (tenant) ID* en Origen de datos.
+
+Es flujo de código con **PKCE**: no hay *client secret*, el token se emite a tu cuenta, vive en
+`sessionStorage` y desaparece al cerrar la pestaña. La página solo ve lo que tú ya puedes ver.
+El identificador de aplicación y el de directorio no son secretos: van en el código de cualquier
+aplicación de página única.
+
+> El flujo de autenticación **no ha podido probarse contra un tenant real**. El armado de las
+> consultas, el troceado por lotes, la conversión de la respuesta y el manejo de errores sí
+> están verificados con respuestas simuladas.
+
+### Escala
+
+Medido en Chrome: 70.000 filas cargan en 6 s (83 MB); 371.000 en 18 s (295 MB); dos millones
+tumban la pestaña. Un parque de 27.000 equipos son ~1,3 millones de filas de detalle, así que
+la vía practicable es **parque + catálogo agregado**, que cubre el 100 % del parque con unas
+decenas de miles de filas. El detalle se añade solo donde hace falta.
 
 ---
 

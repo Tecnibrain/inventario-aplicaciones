@@ -19,7 +19,7 @@ function renderNav(A) {
     ? `<div class="nav-grp">Vista cliente</div>` + ['resumen','informe','tendencias'].map(item).join('')
     : `<div class="nav-grp">Panel</div>` + ['resumen','cumplimiento'].map(item).join('') +
       `<div class="nav-grp">Inventario</div>` + ['aplicaciones','equipos','versiones','mapas'].map(item).join('') +
-      `<div class="nav-grp">Gestión</div>` + ['tendencias','informe','admin'].map(item).join('');
+      `<div class="nav-grp">Gestión</div>` + ['datos','tendencias','informe','admin'].map(item).join('');
 }
 
 function fsel(dim, label, entries) {
@@ -314,6 +314,22 @@ document.addEventListener('click', async e => {
       HIST = []; histSave(); toast('Histórico borrado'); render();
     } return;
   }
+  if ((el = cl('[data-kql]'))) {
+    CFG.kql = CFG.kql || {}; CFG.kql.ver = el.getAttribute('data-kql'); cfgSave(); render(); return;
+  }
+  if ((el = cl('[data-kqlact]'))) {
+    const acc = el.getAttribute('data-kqlact'), box = $('#kqlBox');
+    const cual = box ? box.getAttribute('data-kqlsave') : '';
+    if (acc === 'copiar') {
+      try { await navigator.clipboard.writeText(box.value); toast('Consulta copiada al portapapeles'); }
+      catch (e) { box.select(); toast('Pulsa Ctrl+C para copiarla'); }
+    } else {
+      if (CFG.kql) delete CFG.kql[cual];
+      cfgSave(); toast('Consulta restaurada'); render();
+    }
+    return;
+  }
+  if ((el = cl('[data-gx]'))) { await gxAction(el.getAttribute('data-gx')); return; }
   if ((el = cl('[data-adm]'))) { await admAction(el.getAttribute('data-adm')); return; }
   if ((el = cl('[data-load]'))) {
     const modo = el.getAttribute('data-load');
@@ -358,10 +374,19 @@ document.addEventListener('change', e => {
     S.limit = {}; render(); return;
   }
   if (el.matches && el.matches('[data-cfg]')) {
-    const path = el.getAttribute('data-cfg');
-    const v = el.type === 'number' ? Math.max(1, +el.value || 1) : el.value;
-    if (path.startsWith('params.')) CFG.params[path.slice(7)] = v; else CFG[path] = v;
-    cfgSave(); toast('Parámetro guardado'); return;
+    const path = el.getAttribute('data-cfg').split('.');
+    const v = el.type === 'number' ? Math.max(1, +el.value || 1) : el.value.trim();
+    let o = CFG;
+    for (let i = 0; i < path.length - 1; i++) o = (o[path[i]] = o[path[i]] || {});
+    o[path[path.length - 1]] = v;
+    cfgSave(); toast('Parámetro guardado');
+    if (path[0] === 'graph') render();
+    return;
+  }
+  if (el.matches && el.matches('[data-kqlsave]')) {
+    CFG.kql = CFG.kql || {};
+    CFG.kql[el.getAttribute('data-kqlsave')] = el.value;
+    cfgSave(); toast('Consulta guardada'); return;
   }
   if (el.matches && el.matches('[data-rule]')) {
     const [k, field] = el.getAttribute('data-rule').split('|');
@@ -411,6 +436,37 @@ async function doExport(kind) {
   toast('Generando el libro de Excel…');
   const blob = await makeXlsx(sheets);
   return saveFile(baseName() + '_informe.xlsx', blob);
+}
+
+/* ---- acciones de la conexión con Defender ---- */
+async function gxAction(a) {
+  if (a === 'entrar') return conectar();
+  if (a === 'salir') return desconectar();
+  if (a === 'traer') {
+    const cuales = [];
+    if ($('#gxParque').checked) cuales.push('parque');
+    if ($('#gxCatalogo').checked) cuales.push('catalogo');
+    if ($('#gxExcepciones').checked) cuales.push('excepciones');
+    const lotes = Math.max(0, Math.min(64, +$('#gxLotes').value || 0));
+    if (lotes) cuales.push('detalle');
+    if (!cuales.length) { toast('Marca al menos una consulta'); return; }
+    const btn = $('[data-gx="traer"]');
+    btn.disabled = true; btn.textContent = 'Consultando…';
+    $('#gxLog').innerHTML = '';
+    try {
+      const n = await traerDeDefender(cuales, lotes);
+      $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
+      toast(fmt(n) + ' filas cargadas desde Defender');
+      render();
+    } catch (e) {
+      $('#gxLog').innerHTML += '<span style="color:var(--crit-ink)">✖ ' + esc(e.message) + '</span>';
+      toast('No se pudo consultar');
+    } finally {
+      const b = $('[data-gx="traer"]');
+      if (b) { b.disabled = false; b.textContent = 'Ejecutar y cargar'; }
+    }
+    return;
+  }
 }
 
 /* ---- acciones de administración ---- */
@@ -538,8 +594,24 @@ window.addEventListener('drop', async e => {
   for (let i = 0; i < fs.length; i++) await loadFile(fs[i], !(primeraCarga && i === 0));
 });
 
+/* ---- abrir la aplicación sin datos, para poder conectar ---- */
+function abrirVacio(vista) {
+  M.aggFull = M.aggFull || aggregate(M.rows);
+  M.effVer = M.effVer || new Map();
+  $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
+  go(vista || 'datos');
+}
+$('#btnConectar').addEventListener('click', () => abrirVacio('datos'));
+
 /* arranque */
-cfgLoad(); histLoad(); readHash();
+cfgLoad(); histLoad();
+M.aggFull = aggregate(M.rows);
+(async () => {
+  const err = await completarLogin();
+  readHash();
+  if (err) { fail(err); return; }
+  if (conectado()) { abrirVacio(S.view === 'resumen' ? 'datos' : S.view); toast('Conectado a Defender'); }
+})();
 </script>
 </body>
 </html>

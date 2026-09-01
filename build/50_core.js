@@ -52,7 +52,7 @@ function filterRows(exceptDim) {
 }
 
 /* ---- rutas: el hash permite volver atrás desde un detalle ---- */
-const VIEW_IDS = ['resumen','cumplimiento','aplicaciones','equipos','versiones','tendencias','mapas','informe','admin'];
+const VIEW_IDS = ['resumen','cumplimiento','aplicaciones','equipos','versiones','tendencias','mapas','datos','informe','admin'];
 function go(view, sel) {
   S.view = view;
   S.sel = { app: null, device: null };
@@ -85,7 +85,7 @@ const CFG_DEF = {
   org: '',
   params: { syncDias: 7, umbralOk: 95, umbralWarn: 85, coberturaGestionada: 90, thinPct: 30,
             alcance: 'gestionadas' },
-  apps: {}
+  apps: {}, graph: {}, kql: {}
 };
 let CFG = JSON.parse(JSON.stringify(CFG_DEF));
 
@@ -97,6 +97,8 @@ function cfgLoad() {
       CFG = Object.assign(JSON.parse(JSON.stringify(CFG_DEF)), o);
       CFG.params = Object.assign({}, CFG_DEF.params, o.params || {});
       CFG.apps = o.apps || {};
+      CFG.graph = o.graph || {};
+      CFG.kql = o.kql || {};
     }
   } catch (e) { /* almacenamiento bloqueado: se sigue en memoria */ }
 }

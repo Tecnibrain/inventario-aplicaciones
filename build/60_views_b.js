@@ -461,6 +461,7 @@ const VIEWS = {
   versiones:    { l:'Versiones',     ic:'fork',    f:vVersiones },
   tendencias:   { l:'Tendencias',    ic:'trend',   f:vTendencias,   cli:true },
   mapas:        { l:'Mapas',         ic:'map',     f:vMapas },
+  datos:        { l:'Origen de datos', ic:'db',    f:vDatos },
   informe:      { l:'Informe cliente', ic:'file',  f:vInforme,      cli:true },
   admin:        { l:'Administración',ic:'cog',     f:vAdmin }
 };

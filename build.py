@@ -29,6 +29,7 @@ PARTES = [
     '50_core.js',        # estado, rutas, catalogo, cumplimiento, historico
     '60_views_a.js',     # resumen, cumplimiento, aplicaciones, equipos
     '60_views_b.js',     # versiones, tendencias, mapas, informe, administracion
+    '65_datos.js',       # consultas KQL y conexion con Defender (PKCE)
     '70_app.js',         # navegacion, exportacion, interaccion, carga y cierre
 ]
 
