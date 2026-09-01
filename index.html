@@ -3552,6 +3552,37 @@ async function huntingQuery(kql) {
     throw new Error('Respuesta inesperada de Graph. Cuerpo recibido: ' + txt.slice(0, 400));
   return filas;
 }
+/**
+ * Cuerpo JSON para pegar en Graph Explorer. La consulta va como una sola cadena,
+ * asi que los saltos de linea y las comillas tienen que ir escapados: de eso se
+ * encarga JSON.stringify.
+ */
+function cuerpoGraph(kql) {
+  return JSON.stringify({ Query: kql }, null, 2);
+}
+
+/**
+ * Carga la respuesta que devuelve Graph Explorer. Acepta el JSON completo, solo
+ * el array de resultados, o el objeto con `results`, que es lo que se copia
+ * segun desde donde se haga.
+ */
+function cargarRespuestaGraph(texto, nombre, reset) {
+  let j;
+  try { j = JSON.parse(texto); }
+  catch (e) { throw new Error('Eso no es JSON válido. Copia la respuesta completa del panel de Graph Explorer.'); }
+  const filas = Array.isArray(j) ? j : (j.results || j.Results || j.value || null);
+  if (!Array.isArray(filas))
+    throw new Error('No encuentro la lista de resultados. Se espera un array, o un objeto con «results».');
+  if (!filas.length) throw new Error('La respuesta no trae ninguna fila.');
+  const grid = filasAGrid(filas);
+  const src = addSource(grid, nombre || 'respuesta de Graph', '', !!reset);
+  M.aggFull = aggregate(M.rows);
+  M.effVer = effVersions(M.rows);
+  seedCatalog();
+  histSnapshot();
+  return src;
+}
+
 /** Convierte la respuesta (lista de objetos) en la cuadricula que lee el modelo. */
 function filasAGrid(filas) {
   if (!filas.length) return [];
@@ -3830,6 +3861,7 @@ function vDatos(A, rows) {
       <div class="row" style="margin-bottom:12px">
         ${Object.keys(KQL).map(k => `<button class="tbtn" data-kql="${k}" aria-pressed="${k === sel}">${esc(KQL[k].l)}</button>`).join('')}
         <span class="spacer"></span>
+        <button class="btn" data-kqlact="graph" title="Copia el cuerpo JSON listo para pegar en Graph Explorer">Cuerpo JSON</button>
         <button class="btn" data-kqlact="contar" title="Genera una variante que solo devuelve el número de filas">Contar filas</button>
         <button class="btn" data-kqlact="diagnostico" title="Trocea la consulta en pasos para localizar cuál falla">Diagnóstico</button>
         <button class="btn" data-kqlact="copiar">Copiar</button>
@@ -3878,6 +3910,46 @@ function vDatos(A, rows) {
       </div>
     </div>` +
     '<div id="anclaConexion"></div>' +
+    sec('Graph Explorer', 'La herramienta web de Microsoft. No requiere registrar nada ni instalar nada') +
+    `<div class="adm-grid">
+      <div class="card"><div class="card-h"><div><h3>Ejecutar en Graph Explorer</h3>
+        <p>Usa la aplicación de Microsoft, no la tuya</p></div></div>
+        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
+          <ol style="margin:0;padding-left:20px">
+            <li>Abre <a href="https://developer.microsoft.com/graph/graph-explorer" target="_blank"
+                rel="noopener" style="color:var(--brand)">Graph Explorer</a> e inicia sesión con tu cuenta.</li>
+            <li>Método <b>POST</b>, versión <b>v1.0</b>, y esta dirección:
+              <div class="mono mini" style="background:var(--surface-2);border:1px solid var(--line);
+                   border-radius:7px;padding:7px 10px;margin:6px 0;word-break:break-all">https://graph.microsoft.com/v1.0/security/runHuntingQuery</div></li>
+            <li>En la pestaña <b>Request body</b> pega el cuerpo: botón <b>Cuerpo JSON</b> arriba, en Consultas.</li>
+            <li>En <b>Modify permissions</b> concede <code>ThreatHunting.Read.All</code>.</li>
+            <li><b>Run query</b>, copia la respuesta y pégala aquí abajo.</li>
+          </ol>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><div><h3>Pegar la respuesta</h3>
+        <p>El JSON que devuelve Graph Explorer entra directo al modelo</p></div></div>
+        <div style="margin-top:14px">
+          <textarea id="gxPegar" spellcheck="false" placeholder='{ "results": [ { "DeviceName": "...", ... } ] }'
+            style="width:100%;min-height:150px;background:var(--surface-2);border:1px solid var(--line);
+                   border-radius:9px;padding:11px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;
+                   color:var(--ink);line-height:1.5;resize:vertical"></textarea>
+          <div class="row" style="margin-top:10px">
+            <select class="fsel" id="gxNombre" style="max-width:none">
+              <option value="parque">Es el parque de equipos</option>
+              <option value="catalogo" selected>Es el catálogo agregado</option>
+              <option value="excepciones">Son las excepciones</option>
+              <option value="otro">Otro</option>
+            </select>
+            <label class="chk"><input type="checkbox" id="gxReset"> Reemplazar lo cargado</label>
+            <button class="btn btn-p" data-gx="pegar" style="margin-left:auto">Cargar respuesta</button>
+          </div>
+          <p class="mini" style="margin-top:10px">La forma se detecta sola por las columnas; el nombre es solo
+            para reconocerlo en la lista de fuentes. Si la respuesta es muy larga, Graph Explorer puede tardar
+            en mostrarla: usa <b>Contar filas</b> antes para saber a qué te enfrentas.</p>
+        </div>
+      </div>
+    </div>` +
     sec('Extraer con tu cuenta', 'Sin registrar ninguna aplicación: el módulo oficial de Microsoft ya trae la suya') +
     `<div class="adm-grid">
       <div class="card"><div class="card-h"><div><h3>Script de PowerShell</h3>
@@ -4328,6 +4400,12 @@ document.addEventListener('click', async e => {
   if ((el = cl('[data-kqlact]'))) {
     const acc = el.getAttribute('data-kqlact'), box = $('#kqlBox');
     const cual = box ? box.getAttribute('data-kqlsave') : '';
+    if (acc === 'graph') {
+      const c = cuerpoGraph(box.value);
+      try { await navigator.clipboard.writeText(c); toast('Cuerpo JSON copiado: pégalo en Request body'); }
+      catch (e) { box.value = c; toast('Cuerpo JSON puesto en el cuadro'); }
+      return;
+    }
     if (acc === 'diagnostico') {
       const c = kqlDiagnostico();
       try { await navigator.clipboard.writeText(c); toast('Diagnóstico copiado: pega los bloques uno a uno'); }
@@ -4461,6 +4539,20 @@ async function doExport(kind) {
 
 /* ---- acciones de la conexión con Defender ---- */
 async function gxAction(a) {
+  if (a === 'pegar') {
+    const txt = ($('#gxPegar') || {}).value || '';
+    if (!txt.trim()) { toast('Pega antes la respuesta de Graph Explorer'); return; }
+    const nombres = { parque: 'parque (Graph)', catalogo: 'catálogo (Graph)',
+                      excepciones: 'excepciones (Graph)', otro: 'respuesta de Graph' };
+    try {
+      const src = cargarRespuestaGraph(txt, nombres[($('#gxNombre') || {}).value] || 'respuesta de Graph',
+                                       ($('#gxReset') || {}).checked);
+      $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
+      toast(`Cargado: ${fmt(src.filas)} filas (${src.shape})`);
+      render();
+    } catch (e) { toast(e.message); }
+    return;
+  }
   if (a === 'ps') {
     const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));
     const propia = !!($('#psPropia') || {}).checked;

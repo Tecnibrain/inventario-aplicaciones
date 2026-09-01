@@ -350,6 +350,12 @@ document.addEventListener('click', async e => {
   if ((el = cl('[data-kqlact]'))) {
     const acc = el.getAttribute('data-kqlact'), box = $('#kqlBox');
     const cual = box ? box.getAttribute('data-kqlsave') : '';
+    if (acc === 'graph') {
+      const c = cuerpoGraph(box.value);
+      try { await navigator.clipboard.writeText(c); toast('Cuerpo JSON copiado: pégalo en Request body'); }
+      catch (e) { box.value = c; toast('Cuerpo JSON puesto en el cuadro'); }
+      return;
+    }
     if (acc === 'diagnostico') {
       const c = kqlDiagnostico();
       try { await navigator.clipboard.writeText(c); toast('Diagnóstico copiado: pega los bloques uno a uno'); }
@@ -483,6 +489,20 @@ async function doExport(kind) {
 
 /* ---- acciones de la conexión con Defender ---- */
 async function gxAction(a) {
+  if (a === 'pegar') {
+    const txt = ($('#gxPegar') || {}).value || '';
+    if (!txt.trim()) { toast('Pega antes la respuesta de Graph Explorer'); return; }
+    const nombres = { parque: 'parque (Graph)', catalogo: 'catálogo (Graph)',
+                      excepciones: 'excepciones (Graph)', otro: 'respuesta de Graph' };
+    try {
+      const src = cargarRespuestaGraph(txt, nombres[($('#gxNombre') || {}).value] || 'respuesta de Graph',
+                                       ($('#gxReset') || {}).checked);
+      $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
+      toast(`Cargado: ${fmt(src.filas)} filas (${src.shape})`);
+      render();
+    } catch (e) { toast(e.message); }
+    return;
+  }
   if (a === 'ps') {
     const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));
     const propia = !!($('#psPropia') || {}).checked;
