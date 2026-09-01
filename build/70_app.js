@@ -650,7 +650,11 @@ function abrirVacio(vista) {
   $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
   go(vista || 'datos');
 }
-$('#btnConectar').addEventListener('click', () => abrirVacio('datos'));
+$('#btnConectar').addEventListener('click', () => {
+  abrirVacio('datos');
+  // llevar la vista al bloque de consultas, que es lo que se viene a buscar
+  setTimeout(() => { const c = $('#kqlBox'); if (c) c.closest('.card').scrollIntoView({ block: 'center' }); }, 260);
+});
 
 /* arranque */
 cfgLoad(); histLoad();

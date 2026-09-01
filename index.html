@@ -520,10 +520,14 @@ body.mode-cliente .shell{grid-template-columns:minmax(0,1fr)}
     <div class="row" style="justify-content:center">
       <button class="btn btn-p" id="btnPick" style="padding:11px 22px;font-size:13.5px">Seleccionar archivo</button>
       <button class="btn" id="btnConectar" style="padding:11px 22px;font-size:13.5px"
-              title="Consultar Advanced Hunting con tu cuenta">Conectar con Defender</button>
+              title="Consultas KQL listas para pegar, script de PowerShell y conexion directa">Obtener datos de Defender</button>
     </div>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt" multiple hidden>
     <input type="file" id="cfgFile" accept=".json,application/json" hidden>
+    <p class="mini" style="margin:14px auto 0;max-width:430px;color:var(--ink-4)">
+      ¿No tienes todavía el archivo? En <b>Obtener datos de Defender</b> están las consultas KQL
+      listas para pegar en Advanced Hunting y el script que las ejecuta por ti.
+    </p>
     <div class="drop-formats">
       <span class="tag">.XLSX</span><span class="tag">.XLSM</span><span class="tag">.CSV</span><span class="tag">.TSV</span>
       <span class="tag" style="border-color:rgba(15,254,251,.35);color:var(--brand)">VARIOS A LA VEZ</span>
@@ -4549,7 +4553,11 @@ function abrirVacio(vista) {
   $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
   go(vista || 'datos');
 }
-$('#btnConectar').addEventListener('click', () => abrirVacio('datos'));
+$('#btnConectar').addEventListener('click', () => {
+  abrirVacio('datos');
+  // llevar la vista al bloque de consultas, que es lo que se viene a buscar
+  setTimeout(() => { const c = $('#kqlBox'); if (c) c.closest('.card').scrollIntoView({ block: 'center' }); }, 260);
+});
 
 /* arranque */
 cfgLoad(); histLoad();
