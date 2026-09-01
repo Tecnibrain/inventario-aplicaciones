@@ -470,19 +470,28 @@ function vDatos(A, rows) {
   const texto = (CFG.kql && CFG.kql[sel]) || (KQL[sel] ? KQL[sel].f() : '');
 
   const fuentes = M.sources.length ? `<div class="mt-wrap"><div class="mt-scroll"><table class="mt">
-      <thead><tr><th>Archivo</th><th>Forma</th><th class="n">Filas</th><th class="n">Equipos</th><th>Estado</th></tr></thead>
-      <tbody>${M.sources.map(s => `<tr>
+      <thead><tr><th>Archivo</th><th>Forma</th><th class="n">Filas</th><th class="n">Equipos</th>
+        <th>Estado</th><th style="width:46px"></th></tr></thead>
+      <tbody>${M.sources.map((s, i) => `<tr>
         <td class="name">${esc(s.name)}</td>
         <td><span class="pill ${s.shape === 'detalle' ? 'y' : 'n'}">${esc(s.shape)}</span></td>
         <td class="n">${fmt(s.filas)}</td><td class="n">${s.equipos ? fmt(s.equipos) : '—'}</td>
         <td>${s.truncado && s.truncado.length
           ? `<span class="sem sem-pill bad">Parece cortado</span>`
-          : `<span class="sem sem-pill ok">Completo</span>`}</td></tr>`).join('')}</tbody>
-    </table></div></div>` : '<div class="empty">Todavía no has cargado ningún archivo</div>';
+          : `<span class="sem sem-pill ok">Completo</span>`}</td>
+        <td><button class="tbtn" data-rmsrc="${i}" title="Quitar este archivo del modelo"
+              style="color:var(--crit-ink);border-color:rgba(208,59,59,.35)">Quitar</button></td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="dt-foot"><span>${fmt(M.sources.length)} archivo${M.sources.length > 1 ? 's' : ''} ·
+      <b>${fmt(M.rows.length)}</b> filas · <b>${fmt(M.devInfo.size)}</b> equipos con ficha</span>
+      <button class="btn" data-rmsrc="todas" style="margin-left:auto">Quitar todos</button>
+      <button class="btn btn-p" data-load="add">Añadir archivo</button></div></div>`
+    : `<div class="mt-wrap"><div class="empty" style="padding:26px">Todavía no has cargado ningún archivo</div>
+       <div class="dt-foot"><button class="btn btn-p" data-load="add" style="margin-left:auto">Añadir archivo</button></div></div>`;
 
   return viewHead('Origen de datos',
     'De dónde salen los números: los archivos cargados, las consultas que los producen y la conexión directa con Defender.') +
-    sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo') +
+    sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo. Puedes quitar el que hayas cargado por error') +
     fuentes +
     sec('Consultas', 'Generadas desde tu estándar. Pégalas en Advanced Hunting o ejecútalas desde aquí') +
     `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>

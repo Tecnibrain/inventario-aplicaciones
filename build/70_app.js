@@ -68,6 +68,9 @@ function render() {
     renderNav(A); renderFilters(); renderChips();
     const v = VIEWS[S.view] || VIEWS.resumen;
     $('#view').innerHTML = v.f(A, rows);
+    $('#fileName').textContent = M.sources.length > 1
+      ? M.sources.length + ' archivos' : truncate((M.sources[0] || {}).name || '—', 26);
+    $('#fileName').title = M.sources.map(s => s.name + ' (' + s.shape + ', ' + fmt(s.filas) + ')').join(String.fromCharCode(10));
     $('#fileRows').textContent = '· ' + fmt(M.rows.length) + ' filas';
     $('#brandSub').textContent = CFG.org || 'Gestión de software y cumplimiento';
     $('#mAdmin').setAttribute('aria-pressed', S.mode === 'admin' ? 'true' : 'false');
@@ -316,6 +319,26 @@ document.addEventListener('click', async e => {
   }
   if ((el = cl('[data-kql]'))) {
     CFG.kql = CFG.kql || {}; CFG.kql.ver = el.getAttribute('data-kql'); cfgSave(); render(); return;
+  }
+  if ((el = cl('[data-rmsrc]'))) {
+    const v = el.getAttribute('data-rmsrc');
+    if (v === 'todas') {
+      if (!confirm('¿Quitar todos los archivos y volver a la pantalla inicial?')) return;
+      M.sources = []; mergeSources();
+      $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
+      $('#fileInput').value = ''; return;
+    }
+    const fuera = removeSource(+v);
+    if (!fuera) return;
+    if (!M.sources.length) {
+      $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
+      $('#fileInput').value = ''; toast('Sin archivos cargados'); return;
+    }
+    M.aggFull = aggregate(M.rows);
+    M.effVer = effVersions(M.rows);
+    S.f = {}; S.limit = {};
+    toast('Quitado: ' + truncate(fuera.name, 28));
+    render(); return;
   }
   if ((el = cl('[data-lote]'))) {
     CFG.kql = CFG.kql || {};
@@ -586,9 +609,6 @@ async function loadFile(file, añadir) {
     if (!añadir) { S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {}; }
     if (añadir) toast(`Añadido: ${truncate(name, 24)} · ${fmt(src.filas)} filas (${src.shape})`);
     $('#qGlobal').value = '';
-    $('#fileName').textContent = M.sources.length > 1
-      ? M.sources.length + ' archivos' : truncate(name, 26);
-    $('#fileName').title = M.sources.map(s => s.name + ' (' + s.shape + ', ' + fmt(s.filas) + ')').join('\n');
     $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
     document.title = (CFG.org ? CFG.org + ' · ' : '') + 'Inventario de Aplicaciones';
     readHash();
@@ -597,10 +617,14 @@ async function loadFile(file, añadir) {
   } catch (err) { console.error(err); fail(err && err.message ? err.message : String(err)); }
 }
 $('#btnPick').addEventListener('click', () => $('#fileInput').click());
-$('#fileInput').addEventListener('change', e => {
+$('#fileInput').addEventListener('change', async e => {
   const add = $('#fileInput').dataset.add === '1';
   $('#fileInput').dataset.add = '';
-  for (const f of e.target.files) loadFile(f, add || (!$('#app').hidden && f !== e.target.files[0]));
+  const fs = Array.from(e.target.files);
+  const yaHabia = !$('#app').hidden;
+  // secuencial: loadFile es asincrona y en paralelo se pisarian entre si
+  for (let i = 0; i < fs.length; i++) await loadFile(fs[i], add || yaHabia || i > 0);
+  e.target.value = '';
 });
 dropCard.addEventListener('click', e => { if (e.target === dropCard) $('#fileInput').click(); });
 ['dragenter', 'dragover'].forEach(ev => window.addEventListener(ev, e => {

@@ -56,14 +56,13 @@ function addSource(grid, fileName, sheet, reset) {
     'No se reconoció ninguna columna útil. Se necesita al menos una columna de ' +
     'aplicación o de equipo. Comprueba que la primera fila sean las cabeceras.');
 
-  if (reset) {
-    M.rows = []; M.devInfo = new Map(); M.sources = [];
-    M.hasDetalle = false; M.hasAgregado = false;
-  }
+  if (reset) M.sources = [];
 
   const g = (r, k) => cols[k] == null ? '' : (r[cols[k]] == null ? '' : r[cols[k]]);
   const nuevas = [];
-  let devs = 0;
+  // Cada fuente guarda sus propias filas y fichas de equipo. Asi retirar un
+  // archivo cargado por error es rehacer la mezcla sin el, no deshacerla.
+  const fichas = new Map();
 
   for (let i = 1; i < grid.length; i++) {
     const r = grid[i];
@@ -73,8 +72,8 @@ function addSource(grid, fileName, sheet, reset) {
 
     // ficha de equipo: se guarda siempre que la fila traiga nombre de equipo
     if (device) {
-      let d = M.devInfo.get(device);
-      if (!d) { M.devInfo.set(device, d = { device }); devs++; }
+      let d = fichas.get(device);
+      if (!d) fichas.set(device, d = { device });
       const set = (k, v) => { if (v !== '' && v != null && !d[k]) d[k] = v; };
       set('user', String(g(r, 'user')).trim());
       set('domain', String(g(r, 'domain')).trim());
@@ -124,18 +123,43 @@ function addSource(grid, fileName, sheet, reset) {
   if (!nuevas.length && shape !== 'parque')
     throw new Error('El archivo no contiene filas de datos por debajo de la cabecera.');
 
-  M.rows = M.rows.concat(nuevas);
-  if (shape === 'detalle') M.hasDetalle = true;
-  if (shape === 'agregado') M.hasAgregado = true;
-
-  const truncado = detectaCorte(shape, grid.length - 1, nuevas, devs);
-  M.sources.push({ name: fileName, sheet, shape, filas: nuevas.length || (grid.length - 1),
-                   equipos: devs, truncado, headers });
-  if (!M.headers.length || shape === 'detalle') { M.headers = headers; M.cols = cols; }
-  M.fileName = M.sources.map(s => s.name).join(' + ');
-  M.sheet = sheet;
-  recomputeModel();
+  const truncado = detectaCorte(shape, grid.length - 1, nuevas, fichas.size);
+  M.sources.push({ name: fileName, sheet, shape, cols, headers, truncado,
+                   filas: nuevas.length || (grid.length - 1), equipos: fichas.size,
+                   rows: nuevas, devs: fichas });
+  mergeSources();
   return M.sources[M.sources.length - 1];
+}
+
+/** Rehace el modelo a partir de las fuentes que queden. */
+function mergeSources() {
+  M.rows = [];
+  M.devInfo = new Map();
+  M.hasDetalle = false;
+  M.hasAgregado = false;
+  M.headers = [];
+  for (const s of M.sources) {
+    M.rows = M.rows.concat(s.rows);
+    s.devs.forEach((d, k) => {
+      let t = M.devInfo.get(k);
+      if (!t) M.devInfo.set(k, t = { device: k });
+      for (const campo in d) if (d[campo] !== '' && d[campo] != null && !t[campo]) t[campo] = d[campo];
+    });
+    if (s.shape === 'detalle') M.hasDetalle = true;
+    if (s.shape === 'agregado') M.hasAgregado = true;
+    if (!M.headers.length || s.shape === 'detalle') { M.headers = s.headers; M.cols = s.cols; }
+  }
+  M.fileName = M.sources.map(s => s.name).join(' + ');
+  recomputeModel();
+  return M;
+}
+
+/** Retira una fuente cargada por error y rehace el modelo sin ella. */
+function removeSource(i) {
+  if (i < 0 || i >= M.sources.length) return null;
+  const fuera = M.sources.splice(i, 1)[0];
+  mergeSources();
+  return fuera;
 }
 
 /**

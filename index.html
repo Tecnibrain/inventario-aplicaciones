@@ -513,17 +513,20 @@ body.mode-cliente .shell{grid-template-columns:minmax(0,1fr)}
       <path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>
     </svg>
     <h2>Carga el inventario de tus equipos</h2>
-    <p>Arrastra el export de Intune, Configuration Manager o cualquier inventario en Excel/CSV.
-       Todo el procesamiento ocurre <b>dentro de tu navegador</b>: ningún dato sale del equipo.</p>
+    <p>Arrastra <b>uno o varios archivos a la vez</b>: exports de Defender, Intune o cualquier
+       inventario en Excel/CSV. Se funden en un solo modelo, así que puedes traer el parque, el
+       catálogo y las excepciones por separado, o el mismo inventario partido en lotes.
+       Todo se procesa <b>dentro de tu navegador</b>: ningún dato sale del equipo.</p>
     <div class="row" style="justify-content:center">
       <button class="btn btn-p" id="btnPick" style="padding:11px 22px;font-size:13.5px">Seleccionar archivo</button>
       <button class="btn" id="btnConectar" style="padding:11px 22px;font-size:13.5px"
               title="Consultar Advanced Hunting con tu cuenta">Conectar con Defender</button>
     </div>
-    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt" hidden>
+    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt" multiple hidden>
     <input type="file" id="cfgFile" accept=".json,application/json" hidden>
     <div class="drop-formats">
       <span class="tag">.XLSX</span><span class="tag">.XLSM</span><span class="tag">.CSV</span><span class="tag">.TSV</span>
+      <span class="tag" style="border-color:rgba(15,254,251,.35);color:var(--brand)">VARIOS A LA VEZ</span>
     </div>
     <div class="privacy">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -1054,14 +1057,13 @@ function addSource(grid, fileName, sheet, reset) {
     'No se reconoció ninguna columna útil. Se necesita al menos una columna de ' +
     'aplicación o de equipo. Comprueba que la primera fila sean las cabeceras.');
 
-  if (reset) {
-    M.rows = []; M.devInfo = new Map(); M.sources = [];
-    M.hasDetalle = false; M.hasAgregado = false;
-  }
+  if (reset) M.sources = [];
 
   const g = (r, k) => cols[k] == null ? '' : (r[cols[k]] == null ? '' : r[cols[k]]);
   const nuevas = [];
-  let devs = 0;
+  // Cada fuente guarda sus propias filas y fichas de equipo. Asi retirar un
+  // archivo cargado por error es rehacer la mezcla sin el, no deshacerla.
+  const fichas = new Map();
 
   for (let i = 1; i < grid.length; i++) {
     const r = grid[i];
@@ -1071,8 +1073,8 @@ function addSource(grid, fileName, sheet, reset) {
 
     // ficha de equipo: se guarda siempre que la fila traiga nombre de equipo
     if (device) {
-      let d = M.devInfo.get(device);
-      if (!d) { M.devInfo.set(device, d = { device }); devs++; }
+      let d = fichas.get(device);
+      if (!d) fichas.set(device, d = { device });
       const set = (k, v) => { if (v !== '' && v != null && !d[k]) d[k] = v; };
       set('user', String(g(r, 'user')).trim());
       set('domain', String(g(r, 'domain')).trim());
@@ -1122,18 +1124,43 @@ function addSource(grid, fileName, sheet, reset) {
   if (!nuevas.length && shape !== 'parque')
     throw new Error('El archivo no contiene filas de datos por debajo de la cabecera.');
 
-  M.rows = M.rows.concat(nuevas);
-  if (shape === 'detalle') M.hasDetalle = true;
-  if (shape === 'agregado') M.hasAgregado = true;
-
-  const truncado = detectaCorte(shape, grid.length - 1, nuevas, devs);
-  M.sources.push({ name: fileName, sheet, shape, filas: nuevas.length || (grid.length - 1),
-                   equipos: devs, truncado, headers });
-  if (!M.headers.length || shape === 'detalle') { M.headers = headers; M.cols = cols; }
-  M.fileName = M.sources.map(s => s.name).join(' + ');
-  M.sheet = sheet;
-  recomputeModel();
+  const truncado = detectaCorte(shape, grid.length - 1, nuevas, fichas.size);
+  M.sources.push({ name: fileName, sheet, shape, cols, headers, truncado,
+                   filas: nuevas.length || (grid.length - 1), equipos: fichas.size,
+                   rows: nuevas, devs: fichas });
+  mergeSources();
   return M.sources[M.sources.length - 1];
+}
+
+/** Rehace el modelo a partir de las fuentes que queden. */
+function mergeSources() {
+  M.rows = [];
+  M.devInfo = new Map();
+  M.hasDetalle = false;
+  M.hasAgregado = false;
+  M.headers = [];
+  for (const s of M.sources) {
+    M.rows = M.rows.concat(s.rows);
+    s.devs.forEach((d, k) => {
+      let t = M.devInfo.get(k);
+      if (!t) M.devInfo.set(k, t = { device: k });
+      for (const campo in d) if (d[campo] !== '' && d[campo] != null && !t[campo]) t[campo] = d[campo];
+    });
+    if (s.shape === 'detalle') M.hasDetalle = true;
+    if (s.shape === 'agregado') M.hasAgregado = true;
+    if (!M.headers.length || s.shape === 'detalle') { M.headers = s.headers; M.cols = s.cols; }
+  }
+  M.fileName = M.sources.map(s => s.name).join(' + ');
+  recomputeModel();
+  return M;
+}
+
+/** Retira una fuente cargada por error y rehace el modelo sin ella. */
+function removeSource(i) {
+  if (i < 0 || i >= M.sources.length) return null;
+  const fuera = M.sources.splice(i, 1)[0];
+  mergeSources();
+  return fuera;
 }
 
 /**
@@ -3691,19 +3718,28 @@ function vDatos(A, rows) {
   const texto = (CFG.kql && CFG.kql[sel]) || (KQL[sel] ? KQL[sel].f() : '');
 
   const fuentes = M.sources.length ? `<div class="mt-wrap"><div class="mt-scroll"><table class="mt">
-      <thead><tr><th>Archivo</th><th>Forma</th><th class="n">Filas</th><th class="n">Equipos</th><th>Estado</th></tr></thead>
-      <tbody>${M.sources.map(s => `<tr>
+      <thead><tr><th>Archivo</th><th>Forma</th><th class="n">Filas</th><th class="n">Equipos</th>
+        <th>Estado</th><th style="width:46px"></th></tr></thead>
+      <tbody>${M.sources.map((s, i) => `<tr>
         <td class="name">${esc(s.name)}</td>
         <td><span class="pill ${s.shape === 'detalle' ? 'y' : 'n'}">${esc(s.shape)}</span></td>
         <td class="n">${fmt(s.filas)}</td><td class="n">${s.equipos ? fmt(s.equipos) : '—'}</td>
         <td>${s.truncado && s.truncado.length
           ? `<span class="sem sem-pill bad">Parece cortado</span>`
-          : `<span class="sem sem-pill ok">Completo</span>`}</td></tr>`).join('')}</tbody>
-    </table></div></div>` : '<div class="empty">Todavía no has cargado ningún archivo</div>';
+          : `<span class="sem sem-pill ok">Completo</span>`}</td>
+        <td><button class="tbtn" data-rmsrc="${i}" title="Quitar este archivo del modelo"
+              style="color:var(--crit-ink);border-color:rgba(208,59,59,.35)">Quitar</button></td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="dt-foot"><span>${fmt(M.sources.length)} archivo${M.sources.length > 1 ? 's' : ''} ·
+      <b>${fmt(M.rows.length)}</b> filas · <b>${fmt(M.devInfo.size)}</b> equipos con ficha</span>
+      <button class="btn" data-rmsrc="todas" style="margin-left:auto">Quitar todos</button>
+      <button class="btn btn-p" data-load="add">Añadir archivo</button></div></div>`
+    : `<div class="mt-wrap"><div class="empty" style="padding:26px">Todavía no has cargado ningún archivo</div>
+       <div class="dt-foot"><button class="btn btn-p" data-load="add" style="margin-left:auto">Añadir archivo</button></div></div>`;
 
   return viewHead('Origen de datos',
     'De dónde salen los números: los archivos cargados, las consultas que los producen y la conexión directa con Defender.') +
-    sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo') +
+    sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo. Puedes quitar el que hayas cargado por error') +
     fuentes +
     sec('Consultas', 'Generadas desde tu estándar. Pégalas en Advanced Hunting o ejecútalas desde aquí') +
     `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
@@ -3931,6 +3967,9 @@ function render() {
     renderNav(A); renderFilters(); renderChips();
     const v = VIEWS[S.view] || VIEWS.resumen;
     $('#view').innerHTML = v.f(A, rows);
+    $('#fileName').textContent = M.sources.length > 1
+      ? M.sources.length + ' archivos' : truncate((M.sources[0] || {}).name || '—', 26);
+    $('#fileName').title = M.sources.map(s => s.name + ' (' + s.shape + ', ' + fmt(s.filas) + ')').join(String.fromCharCode(10));
     $('#fileRows').textContent = '· ' + fmt(M.rows.length) + ' filas';
     $('#brandSub').textContent = CFG.org || 'Gestión de software y cumplimiento';
     $('#mAdmin').setAttribute('aria-pressed', S.mode === 'admin' ? 'true' : 'false');
@@ -4179,6 +4218,26 @@ document.addEventListener('click', async e => {
   }
   if ((el = cl('[data-kql]'))) {
     CFG.kql = CFG.kql || {}; CFG.kql.ver = el.getAttribute('data-kql'); cfgSave(); render(); return;
+  }
+  if ((el = cl('[data-rmsrc]'))) {
+    const v = el.getAttribute('data-rmsrc');
+    if (v === 'todas') {
+      if (!confirm('¿Quitar todos los archivos y volver a la pantalla inicial?')) return;
+      M.sources = []; mergeSources();
+      $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
+      $('#fileInput').value = ''; return;
+    }
+    const fuera = removeSource(+v);
+    if (!fuera) return;
+    if (!M.sources.length) {
+      $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
+      $('#fileInput').value = ''; toast('Sin archivos cargados'); return;
+    }
+    M.aggFull = aggregate(M.rows);
+    M.effVer = effVersions(M.rows);
+    S.f = {}; S.limit = {};
+    toast('Quitado: ' + truncate(fuera.name, 28));
+    render(); return;
   }
   if ((el = cl('[data-lote]'))) {
     CFG.kql = CFG.kql || {};
@@ -4449,9 +4508,6 @@ async function loadFile(file, añadir) {
     if (!añadir) { S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {}; }
     if (añadir) toast(`Añadido: ${truncate(name, 24)} · ${fmt(src.filas)} filas (${src.shape})`);
     $('#qGlobal').value = '';
-    $('#fileName').textContent = M.sources.length > 1
-      ? M.sources.length + ' archivos' : truncate(name, 26);
-    $('#fileName').title = M.sources.map(s => s.name + ' (' + s.shape + ', ' + fmt(s.filas) + ')').join('\n');
     $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
     document.title = (CFG.org ? CFG.org + ' · ' : '') + 'Inventario de Aplicaciones';
     readHash();
@@ -4460,10 +4516,14 @@ async function loadFile(file, añadir) {
   } catch (err) { console.error(err); fail(err && err.message ? err.message : String(err)); }
 }
 $('#btnPick').addEventListener('click', () => $('#fileInput').click());
-$('#fileInput').addEventListener('change', e => {
+$('#fileInput').addEventListener('change', async e => {
   const add = $('#fileInput').dataset.add === '1';
   $('#fileInput').dataset.add = '';
-  for (const f of e.target.files) loadFile(f, add || (!$('#app').hidden && f !== e.target.files[0]));
+  const fs = Array.from(e.target.files);
+  const yaHabia = !$('#app').hidden;
+  // secuencial: loadFile es asincrona y en paralelo se pisarian entre si
+  for (let i = 0; i < fs.length; i++) await loadFile(fs[i], add || yaHabia || i > 0);
+  e.target.value = '';
 });
 dropCard.addEventListener('click', e => { if (e.target === dropCard) $('#fileInput').click(); });
 ['dragenter', 'dragover'].forEach(ev => window.addEventListener(ev, e => {
