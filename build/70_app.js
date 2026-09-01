@@ -317,9 +317,22 @@ document.addEventListener('click', async e => {
   if ((el = cl('[data-kql]'))) {
     CFG.kql = CFG.kql || {}; CFG.kql.ver = el.getAttribute('data-kql'); cfgSave(); render(); return;
   }
+  if ((el = cl('[data-lote]'))) {
+    CFG.kql = CFG.kql || {};
+    const n = Math.max(1, +CFG.kql.lotes || 1);
+    CFG.kql.lote = ((+CFG.kql.lote || 0) + (+el.getAttribute('data-lote')) + n) % n;
+    delete CFG.kql[(CFG.kql.ver || 'catalogo')];   // el texto guardado ya no vale
+    cfgSave(); render(); return;
+  }
   if ((el = cl('[data-kqlact]'))) {
     const acc = el.getAttribute('data-kqlact'), box = $('#kqlBox');
     const cual = box ? box.getAttribute('data-kqlsave') : '';
+    if (acc === 'contar') {
+      const c = kqlContar(box.value);
+      try { await navigator.clipboard.writeText(c); toast('Consulta de conteo copiada: pégala en Defender'); }
+      catch (e) { box.value = c; toast('Consulta de conteo puesta en el cuadro'); }
+      return;
+    }
     if (acc === 'copiar') {
       try { await navigator.clipboard.writeText(box.value); toast('Consulta copiada al portapapeles'); }
       catch (e) { box.select(); toast('Pulsa Ctrl+C para copiarla'); }
@@ -379,8 +392,9 @@ document.addEventListener('change', e => {
     let o = CFG;
     for (let i = 0; i < path.length - 1; i++) o = (o[path[i]] = o[path[i]] || {});
     o[path[path.length - 1]] = v;
+    if (path[0] === 'kql') { CFG.kql.lote = 0; delete CFG.kql[CFG.kql.ver || 'catalogo']; }
     cfgSave(); toast('Parámetro guardado');
-    if (path[0] === 'graph') render();
+    if (path[0] === 'graph' || path[0] === 'kql') render();
     return;
   }
   if (el.matches && el.matches('[data-kqlsave]')) {

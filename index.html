@@ -3243,13 +3243,23 @@ function kqlFiltro() {
   const f = (CFG.kql && CFG.kql.filtro) != null ? CFG.kql.filtro : '| where DeviceType == "Workstation"';
   return f.trim();
 }
+/** Numero de lotes y lote actual, compartidos por las tres consultas. */
+const loteN = () => Math.max(1, Math.min(64, (CFG.kql && +CFG.kql.lotes) || 1));
+const loteI = () => Math.max(0, Math.min(loteN() - 1, (CFG.kql && +CFG.kql.lote) || 0));
+/**
+ * El troceado va dentro del bloque de equipos, no de la tabla de software: asi
+ * las tres consultas parten el parque por el mismo criterio y el lote 3 del
+ * catalogo cubre exactamente los mismos equipos que el lote 3 del parque.
+ */
+const kqlTrozo = () => loteN() > 1 ? `\n    | where hash(DeviceId, ${loteN()}) == ${loteI()}` : '';
+
 const KQL_EQUIPOS = () =>
 `let Equipos = DeviceInfo
     | summarize arg_max(Timestamp, *) by DeviceId
     | extend UserName   = tostring(parse_json(LoggedOnUsers)[0].UserName),
              DomainName = tostring(parse_json(LoggedOnUsers)[0].DomainName)
     | where isnotempty(DeviceName)
-    ${kqlFiltro()}
+    ${kqlFiltro()}${kqlTrozo()}
     | project DeviceId, DeviceName, UserName, DomainName, OSDistribution, OSVersionInfo, SensorHealthState, Timestamp;`;
 
 function kqlParque() {
@@ -3291,15 +3301,23 @@ DeviceTvmSoftwareInventory
 | project DeviceName, UserName, SoftwareVendor, SoftwareName, SoftwareVersion, Aprobada, OSVersionInfo, Timestamp`;
 }
 
-/** Detalle completo, troceado: la consola no lo aguanta de una pieza. */
+/** Detalle completo. El troceado lo pone el bloque de equipos. */
 function kqlDetalle(lote, total) {
-  return KQL_EQUIPOS() + `
+  const prev = CFG.kql && { lotes: CFG.kql.lotes, lote: CFG.kql.lote };
+  CFG.kql = CFG.kql || {}; CFG.kql.lotes = total; CFG.kql.lote = lote;
+  const q = KQL_EQUIPOS() + `
 DeviceTvmSoftwareInventory
 | where isnotempty(SoftwareName)
-| where hash(DeviceId, ${total}) == ${lote}
 | join kind=inner Equipos on DeviceId
 | project DeviceName, UserName, SoftwareVendor, SoftwareName, SoftwareVersion,
           EndOfSupportStatus, ProductCodeCpe, OSDistribution, OSVersionInfo, Timestamp`;
+  if (prev) { CFG.kql.lotes = prev.lotes; CFG.kql.lote = prev.lote; }
+  return q;
+}
+
+/** Cuenta las filas que devolveria una consulta, sin exportarla. */
+function kqlContar(q) {
+  return String(q).replace(/\s+$/, '') + '\n| summarize Filas = count()';
 }
 
 const KQL = {
@@ -3585,12 +3603,33 @@ function vDatos(A, rows) {
     sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo') +
     fuentes +
     sec('Consultas', 'Generadas desde tu estándar. Pégalas en Advanced Hunting o ejecútalas desde aquí') +
+    `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
+      <b>Empieza por el catálogo.</b> La consulta de excepciones compara contra la versión aprobada, y esa
+      versión sale de los datos que ya tengas cargados. Si el estándar se calculó sobre una muestra pequeña,
+      apuntará demasiado alto y las excepciones serán medio parque.
+      El orden que funciona es: <b>parque → catálogo → cargar ambos → volver aquí</b>, y solo entonces
+      generar las excepciones. Con el estándar ya recalculado sobre el parque real, suelen caber sin trocear.
+    </div></div>`+
     `<div class="card">
       <div class="row" style="margin-bottom:12px">
         ${Object.keys(KQL).map(k => `<button class="tbtn" data-kql="${k}" aria-pressed="${k === sel}">${esc(KQL[k].l)}</button>`).join('')}
         <span class="spacer"></span>
+        <button class="btn" data-kqlact="contar" title="Genera una variante que solo devuelve el número de filas">Contar filas</button>
         <button class="btn" data-kqlact="copiar">Copiar</button>
         <button class="btn" data-kqlact="restaurar">Restaurar</button>
+      </div>
+      <div class="row" style="margin-bottom:12px;padding:9px 12px;border:1px solid var(--line);
+           border-radius:9px;background:var(--surface-2)">
+        <span class="mini" style="color:var(--ink-2);font-weight:600">Dividir en lotes</span>
+        <input type="number" min="1" max="64" value="${loteN()}" data-cfg="kql.lotes"
+               style="width:72px;background:var(--surface-1);border:1px solid var(--line);border-radius:7px;
+                      padding:5px 8px;font-size:12.5px;color:var(--ink)">
+        ${loteN() > 1 ? `
+          <button class="btn" data-lote="-1" style="padding:5px 11px">◀</button>
+          <b class="mono" style="min-width:96px;text-align:center">Lote ${loteI() + 1} de ${loteN()}</b>
+          <button class="btn" data-lote="1" style="padding:5px 11px">▶</button>
+          <span class="mini">Exporta uno, avanza y repite. Súbelos todos juntos al tablero.</span>`
+        : `<span class="mini">Si la consola dice que superas el límite de 100.000 filas, sube este número.</span>`}
       </div>
       <p class="mini" style="margin:0 0 10px">${esc(KQL[sel] ? KQL[sel].d : '')}</p>
       <textarea id="kqlBox" data-kqlsave="${sel}" spellcheck="false"
@@ -4015,9 +4054,22 @@ document.addEventListener('click', async e => {
   if ((el = cl('[data-kql]'))) {
     CFG.kql = CFG.kql || {}; CFG.kql.ver = el.getAttribute('data-kql'); cfgSave(); render(); return;
   }
+  if ((el = cl('[data-lote]'))) {
+    CFG.kql = CFG.kql || {};
+    const n = Math.max(1, +CFG.kql.lotes || 1);
+    CFG.kql.lote = ((+CFG.kql.lote || 0) + (+el.getAttribute('data-lote')) + n) % n;
+    delete CFG.kql[(CFG.kql.ver || 'catalogo')];   // el texto guardado ya no vale
+    cfgSave(); render(); return;
+  }
   if ((el = cl('[data-kqlact]'))) {
     const acc = el.getAttribute('data-kqlact'), box = $('#kqlBox');
     const cual = box ? box.getAttribute('data-kqlsave') : '';
+    if (acc === 'contar') {
+      const c = kqlContar(box.value);
+      try { await navigator.clipboard.writeText(c); toast('Consulta de conteo copiada: pégala en Defender'); }
+      catch (e) { box.value = c; toast('Consulta de conteo puesta en el cuadro'); }
+      return;
+    }
     if (acc === 'copiar') {
       try { await navigator.clipboard.writeText(box.value); toast('Consulta copiada al portapapeles'); }
       catch (e) { box.select(); toast('Pulsa Ctrl+C para copiarla'); }
@@ -4077,8 +4129,9 @@ document.addEventListener('change', e => {
     let o = CFG;
     for (let i = 0; i < path.length - 1; i++) o = (o[path[i]] = o[path[i]] || {});
     o[path[path.length - 1]] = v;
+    if (path[0] === 'kql') { CFG.kql.lote = 0; delete CFG.kql[CFG.kql.ver || 'catalogo']; }
     cfgSave(); toast('Parámetro guardado');
-    if (path[0] === 'graph') render();
+    if (path[0] === 'graph' || path[0] === 'kql') render();
     return;
   }
   if (el.matches && el.matches('[data-kqlsave]')) {
