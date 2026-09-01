@@ -86,20 +86,24 @@ function kqlExcepciones() {
   const modo = excAlcance();
 
   if (modo === 'todas') {
+    // Version conservadora: sin arg_max sobre un valor de version, sin reusar un
+    // `let` tabular sin materializar y sin columna Aprobada. El tablero calcula
+    // igualmente la version de referencia, asi que esa columna no hacia falta.
     return KQL_EQUIPOS() + `
-// La version aprobada se calcula aqui: la mas alta observada de cada aplicacion.
-// Es el criterio estricto, y por eso devuelve muchas mas filas.
-let Instalado = DeviceTvmSoftwareInventory
+// La referencia es la version mas alta observada de cada aplicacion, calculada aqui.
+// Es el criterio estricto: devuelve todo lo que no este al maximo.
+let Instalado = materialize(
+    DeviceTvmSoftwareInventory
     | where isnotempty(SoftwareName)
     | join kind=inner Equipos on DeviceId
-    | extend V = parse_version(SoftwareVersion);
-let Aprobadas = Instalado
-    | summarize arg_max(V, SoftwareVersion) by SoftwareVendor, SoftwareName
-    | project SoftwareVendor, SoftwareName, Aprobada = SoftwareVersion;
+    | extend V = parse_version(SoftwareVersion)
+);
+let MaxPorApp = Instalado
+    | summarize MaxV = max(V) by SoftwareVendor, SoftwareName;
 Instalado
-| join kind=inner Aprobadas on SoftwareVendor, SoftwareName
-| where V < parse_version(Aprobada)
-| project DeviceName, UserName, SoftwareVendor, SoftwareName, SoftwareVersion, Aprobada,
+| join kind=inner MaxPorApp on SoftwareVendor, SoftwareName
+| where V < MaxV
+| project DeviceName, UserName, SoftwareVendor, SoftwareName, SoftwareVersion,
           EndOfSupportStatus, OSVersionInfo, Timestamp`;
   }
 
@@ -135,6 +139,47 @@ DeviceTvmSoftwareInventory
           EndOfSupportStatus, ProductCodeCpe, OSDistribution, OSVersionInfo, Timestamp`;
   if (prev) { CFG.kql.lotes = prev.lotes; CFG.kql.lote = prev.lote; }
   return q;
+}
+
+/**
+ * Trocea una consulta en sus pasos para localizar cual falla. Se pega cada
+ * bloque por separado en Advanced Hunting hasta dar con el que da error.
+ */
+function kqlDiagnostico() {
+  const eq = KQL_EQUIPOS();
+  return `// ============================================================
+// PASO 1  ·  ¿funciona el bloque de equipos?
+// ============================================================
+${eq}
+Equipos
+| take 5
+
+// ============================================================
+// PASO 2  ·  ¿existe parse_version en tu entorno?
+// ============================================================
+print Prueba = parse_version("1.10.0") > parse_version("1.9.0")
+
+// ============================================================
+// PASO 3  ·  ¿funciona el cruce con el inventario?
+// ============================================================
+${eq}
+DeviceTvmSoftwareInventory
+| where isnotempty(SoftwareName)
+| join kind=inner Equipos on DeviceId
+| take 5
+
+// ============================================================
+// PASO 4  ·  ¿funciona el calculo de la version mas alta?
+// ============================================================
+${eq}
+DeviceTvmSoftwareInventory
+| where isnotempty(SoftwareName)
+| join kind=inner Equipos on DeviceId
+| extend V = parse_version(SoftwareVersion)
+| summarize MaxV = max(V) by SoftwareVendor, SoftwareName
+| take 5
+
+// Pega los bloques de uno en uno. El primero que falle es el culpable.`;
 }
 
 /** Cuenta las filas que devolveria una consulta, sin exportarla. */
@@ -452,6 +497,7 @@ function vDatos(A, rows) {
         ${Object.keys(KQL).map(k => `<button class="tbtn" data-kql="${k}" aria-pressed="${k === sel}">${esc(KQL[k].l)}</button>`).join('')}
         <span class="spacer"></span>
         <button class="btn" data-kqlact="contar" title="Genera una variante que solo devuelve el número de filas">Contar filas</button>
+        <button class="btn" data-kqlact="diagnostico" title="Trocea la consulta en pasos para localizar cuál falla">Diagnóstico</button>
         <button class="btn" data-kqlact="copiar">Copiar</button>
         <button class="btn" data-kqlact="restaurar">Restaurar</button>
       </div>

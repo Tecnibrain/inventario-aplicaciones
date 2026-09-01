@@ -327,6 +327,12 @@ document.addEventListener('click', async e => {
   if ((el = cl('[data-kqlact]'))) {
     const acc = el.getAttribute('data-kqlact'), box = $('#kqlBox');
     const cual = box ? box.getAttribute('data-kqlsave') : '';
+    if (acc === 'diagnostico') {
+      const c = kqlDiagnostico();
+      try { await navigator.clipboard.writeText(c); toast('Diagnóstico copiado: pega los bloques uno a uno'); }
+      catch (e) { box.value = c; toast('Diagnóstico puesto en el cuadro'); }
+      return;
+    }
     if (acc === 'contar') {
       const c = kqlContar(box.value);
       try { await navigator.clipboard.writeText(c); toast('Consulta de conteo copiada: pégala en Defender'); }
