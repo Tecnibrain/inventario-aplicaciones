@@ -493,6 +493,7 @@ function vDatos(A, rows) {
     'De dónde salen los números: los archivos cargados, las consultas que los producen y la conexión directa con Defender.') +
     sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo. Puedes quitar el que hayas cargado por error') +
     fuentes +
+    '<div id="anclaConsultas"></div>' +
     sec('Consultas', 'Generadas desde tu estándar. Pégalas en Advanced Hunting o ejecútalas desde aquí') +
     `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
       <b>Empieza por el catálogo.</b> La consulta de excepciones compara contra la versión aprobada, y esa
@@ -552,6 +553,7 @@ function vDatos(A, rows) {
           mismo tramo del alfabeto y el análisis saldrá sesgado.</span>
       </div>
     </div>` +
+    '<div id="anclaConexion"></div>' +
     sec('Extraer con tu cuenta', 'Sin registrar ninguna aplicación: el módulo oficial de Microsoft ya trae la suya') +
     `<div class="adm-grid">
       <div class="card"><div class="card-h"><div><h3>Script de PowerShell</h3>

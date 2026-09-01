@@ -650,11 +650,17 @@ function abrirVacio(vista) {
   $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
   go(vista || 'datos');
 }
-$('#btnConectar').addEventListener('click', () => {
+/** Abre Origen de datos y salta al bloque pedido. */
+function irADatos(ancla) {
   abrirVacio('datos');
-  // llevar la vista al bloque de consultas, que es lo que se viene a buscar
-  setTimeout(() => { const c = $('#kqlBox'); if (c) c.closest('.card').scrollIntoView({ block: 'center' }); }, 260);
-});
+  setTimeout(() => {
+    const a = $('#' + ancla);
+    if (a) a.scrollIntoView({ block: 'start' });
+    else window.scrollTo({ top: 0 });
+  }, 280);
+}
+$('#btnConsultas').addEventListener('click', () => irADatos('anclaConsultas'));
+$('#btnConectar').addEventListener('click', () => irADatos('anclaConexion'));
 
 /* arranque */
 cfgLoad(); histLoad();

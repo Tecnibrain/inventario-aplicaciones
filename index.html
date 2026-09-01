@@ -519,14 +519,17 @@ body.mode-cliente .shell{grid-template-columns:minmax(0,1fr)}
        Todo se procesa <b>dentro de tu navegador</b>: ningún dato sale del equipo.</p>
     <div class="row" style="justify-content:center">
       <button class="btn btn-p" id="btnPick" style="padding:11px 22px;font-size:13.5px">Seleccionar archivo</button>
+      <button class="btn" id="btnConsultas" style="padding:11px 22px;font-size:13.5px"
+              title="Consultas KQL listas para pegar en Advanced Hunting">Consultas KQL</button>
       <button class="btn" id="btnConectar" style="padding:11px 22px;font-size:13.5px"
-              title="Consultas KQL listas para pegar, script de PowerShell y conexion directa">Obtener datos de Defender</button>
+              title="Script de PowerShell o conexion directa con tu cuenta">Conectar con Defender</button>
     </div>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt" multiple hidden>
     <input type="file" id="cfgFile" accept=".json,application/json" hidden>
-    <p class="mini" style="margin:14px auto 0;max-width:430px;color:var(--ink-4)">
-      ¿No tienes todavía el archivo? En <b>Obtener datos de Defender</b> están las consultas KQL
-      listas para pegar en Advanced Hunting y el script que las ejecuta por ti.
+    <p class="mini" style="margin:14px auto 0;max-width:470px;color:var(--ink-4)">
+      ¿No tienes todavía el archivo? <b>Consultas KQL</b> te da las consultas listas para pegar
+      en Advanced Hunting. <b>Conectar con Defender</b> las ejecuta por ti, con un script o
+      desde la propia página.
     </p>
     <div class="drop-formats">
       <span class="tag">.XLSX</span><span class="tag">.XLSM</span><span class="tag">.CSV</span><span class="tag">.TSV</span>
@@ -3745,6 +3748,7 @@ function vDatos(A, rows) {
     'De dónde salen los números: los archivos cargados, las consultas que los producen y la conexión directa con Defender.') +
     sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo. Puedes quitar el que hayas cargado por error') +
     fuentes +
+    '<div id="anclaConsultas"></div>' +
     sec('Consultas', 'Generadas desde tu estándar. Pégalas en Advanced Hunting o ejecútalas desde aquí') +
     `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
       <b>Empieza por el catálogo.</b> La consulta de excepciones compara contra la versión aprobada, y esa
@@ -3804,6 +3808,7 @@ function vDatos(A, rows) {
           mismo tramo del alfabeto y el análisis saldrá sesgado.</span>
       </div>
     </div>` +
+    '<div id="anclaConexion"></div>' +
     sec('Extraer con tu cuenta', 'Sin registrar ninguna aplicación: el módulo oficial de Microsoft ya trae la suya') +
     `<div class="adm-grid">
       <div class="card"><div class="card-h"><div><h3>Script de PowerShell</h3>
@@ -4553,11 +4558,17 @@ function abrirVacio(vista) {
   $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
   go(vista || 'datos');
 }
-$('#btnConectar').addEventListener('click', () => {
+/** Abre Origen de datos y salta al bloque pedido. */
+function irADatos(ancla) {
   abrirVacio('datos');
-  // llevar la vista al bloque de consultas, que es lo que se viene a buscar
-  setTimeout(() => { const c = $('#kqlBox'); if (c) c.closest('.card').scrollIntoView({ block: 'center' }); }, 260);
-});
+  setTimeout(() => {
+    const a = $('#' + ancla);
+    if (a) a.scrollIntoView({ block: 'start' });
+    else window.scrollTo({ top: 0 });
+  }, 280);
+}
+$('#btnConsultas').addEventListener('click', () => irADatos('anclaConsultas'));
+$('#btnConectar').addEventListener('click', () => irADatos('anclaConexion'));
 
 /* arranque */
 cfgLoad(); histLoad();

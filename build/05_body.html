@@ -55,14 +55,17 @@
        Todo se procesa <b>dentro de tu navegador</b>: ningún dato sale del equipo.</p>
     <div class="row" style="justify-content:center">
       <button class="btn btn-p" id="btnPick" style="padding:11px 22px;font-size:13.5px">Seleccionar archivo</button>
+      <button class="btn" id="btnConsultas" style="padding:11px 22px;font-size:13.5px"
+              title="Consultas KQL listas para pegar en Advanced Hunting">Consultas KQL</button>
       <button class="btn" id="btnConectar" style="padding:11px 22px;font-size:13.5px"
-              title="Consultas KQL listas para pegar, script de PowerShell y conexion directa">Obtener datos de Defender</button>
+              title="Script de PowerShell o conexion directa con tu cuenta">Conectar con Defender</button>
     </div>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt" multiple hidden>
     <input type="file" id="cfgFile" accept=".json,application/json" hidden>
-    <p class="mini" style="margin:14px auto 0;max-width:430px;color:var(--ink-4)">
-      ¿No tienes todavía el archivo? En <b>Obtener datos de Defender</b> están las consultas KQL
-      listas para pegar en Advanced Hunting y el script que las ejecuta por ti.
+    <p class="mini" style="margin:14px auto 0;max-width:470px;color:var(--ink-4)">
+      ¿No tienes todavía el archivo? <b>Consultas KQL</b> te da las consultas listas para pegar
+      en Advanced Hunting. <b>Conectar con Defender</b> las ejecuta por ti, con un script o
+      desde la propia página.
     </p>
     <div class="drop-formats">
       <span class="tag">.XLSX</span><span class="tag">.XLSM</span><span class="tag">.CSV</span><span class="tag">.TSV</span>
