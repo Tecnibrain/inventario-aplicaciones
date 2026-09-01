@@ -3277,18 +3277,60 @@ DeviceTvmSoftwareInventory
   by SoftwareVendor, SoftwareName, SoftwareVersion, EndOfSupportStatus`;
 }
 
-/** Solo las instalaciones por debajo de la version aprobada del estandar. */
-function kqlExcepciones() {
+/**
+ * Instalaciones por debajo de la version aprobada. Tres alcances:
+ *
+ *   estandar  solo las aplicaciones que gobiernas (administradas y criticas)
+ *   catalogo  todas las que tienen version aprobada en tu catalogo
+ *   todas     todas las del inventario, calculando la version mas alta en KQL
+ *
+ * El tercero no lleva `datatable`: con miles de aplicaciones el literal haria
+ * la consulta impracticable, asi que la referencia se calcula en el servidor.
+ * A cambio es el criterio mas estricto y el que mas filas devuelve.
+ */
+const excAlcance = () => (CFG.kql && CFG.kql.alcanceExc) || 'estandar';
+
+function excDatatable(soloEnAlcance) {
   const filas = [];
   Object.keys(CFG.apps || {}).forEach(k => {
     const r = CFG.apps[k];
-    if (!r || !r.rec || !inScope(k)) return;
+    if (!r || !r.rec) return;
+    if (soloEnAlcance && !inScope(k)) return;
     const nombre = k.indexOf(' / ') >= 0 ? k.slice(k.indexOf(' / ') + 3) : k;
     if (!nombre) return;
     filas.push(`  "${kqlEsc(nombre)}", "${kqlEsc(r.rec)}"`);
   });
-  if (!filas.length) return '// Marca alguna aplicación como administrada o crítica en Administración\n' +
-    '// y aquí aparecerá la consulta con tu estándar.';
+  return filas;
+}
+
+function kqlExcepciones() {
+  const modo = excAlcance();
+
+  if (modo === 'todas') {
+    return KQL_EQUIPOS() + `
+// La version aprobada se calcula aqui: la mas alta observada de cada aplicacion.
+// Es el criterio estricto, y por eso devuelve muchas mas filas.
+let Instalado = DeviceTvmSoftwareInventory
+    | where isnotempty(SoftwareName)
+    | join kind=inner Equipos on DeviceId
+    | extend V = parse_version(SoftwareVersion);
+let Aprobadas = Instalado
+    | summarize arg_max(V, SoftwareVersion) by SoftwareVendor, SoftwareName
+    | project SoftwareVendor, SoftwareName, Aprobada = SoftwareVersion;
+Instalado
+| join kind=inner Aprobadas on SoftwareVendor, SoftwareName
+| where V < parse_version(Aprobada)
+| project DeviceName, UserName, SoftwareVendor, SoftwareName, SoftwareVersion, Aprobada,
+          EndOfSupportStatus, OSVersionInfo, Timestamp`;
+  }
+
+  const filas = excDatatable(modo === 'estandar');
+  if (!filas.length) return modo === 'estandar'
+    ? '// Marca alguna aplicación como administrada o crítica en Administración\n' +
+      '// y aquí aparecerá la consulta con tu estándar.\n' +
+      '// O cambia el alcance a «todas las aplicaciones».'
+    : '// Todavía no hay ninguna versión aprobada en el catálogo.\n' +
+      '// Carga primero el catálogo agregado, o usa el alcance «todas».';
   return `let Estandar = datatable(SoftwareName:string, Aprobada:string) [
 ${filas.join(',\n')}
 ];
@@ -3298,7 +3340,8 @@ DeviceTvmSoftwareInventory
 | join kind=inner Estandar on SoftwareName
 | extend V = parse_version(SoftwareVersion), A = parse_version(Aprobada)
 | where V < A
-| project DeviceName, UserName, SoftwareVendor, SoftwareName, SoftwareVersion, Aprobada, OSVersionInfo, Timestamp`;
+| project DeviceName, UserName, SoftwareVendor, SoftwareName, SoftwareVersion, Aprobada,
+          EndOfSupportStatus, OSVersionInfo, Timestamp`;
 }
 
 /** Detalle completo. El troceado lo pone el bloque de equipos. */
@@ -3323,7 +3366,7 @@ function kqlContar(q) {
 const KQL = {
   parque:      { l: 'Parque de equipos', d: 'Una fila por equipo. Da el censo real, el usuario y la última sincronización.', f: kqlParque },
   catalogo:    { l: 'Catálogo agregado',  d: 'Una fila por aplicación y versión con el recuento de equipos. Cubre el 100 % del parque sin traer el detalle.', f: kqlCatalogo },
-  excepciones: { l: 'Excepciones',        d: 'Solo las instalaciones por debajo de tu versión aprobada. Es la lista de trabajo.', f: kqlExcepciones }
+  excepciones: { l: 'Excepciones',        d: 'Las instalaciones por debajo de la versión aprobada. Es la lista de trabajo: qué equipo, qué aplicación y qué versión tiene.', f: kqlExcepciones }
 };
 
 /* ---- 24.2 autenticacion PKCE ------------------------------------------- */
@@ -3632,6 +3675,21 @@ function vDatos(A, rows) {
         : `<span class="mini">Si la consola dice que superas el límite de 100.000 filas, sube este número.</span>`}
       </div>
       <p class="mini" style="margin:0 0 10px">${esc(KQL[sel] ? KQL[sel].d : '')}</p>
+      ${sel === 'excepciones' ? `
+      <div class="row" style="margin-bottom:12px;padding:9px 12px;border:1px solid var(--line);
+           border-radius:9px;background:var(--surface-2)">
+        <span class="mini" style="color:var(--ink-2);font-weight:600">Aplicaciones incluidas</span>
+        <select class="fsel" data-cfg="kql.alcanceExc" style="max-width:none">
+          <option value="estandar"${excAlcance() === 'estandar' ? ' selected' : ''}>Solo las que gobiernas (${fmt(excDatatable(true).length)})</option>
+          <option value="catalogo"${excAlcance() === 'catalogo' ? ' selected' : ''}>Todas las de mi catálogo (${fmt(excDatatable(false).length)})</option>
+          <option value="todas"${excAlcance() === 'todas' ? ' selected' : ''}>Todas las del inventario</option>
+        </select>
+        <span class="mini">${excAlcance() === 'todas'
+          ? 'La versión aprobada se calcula en la consulta: la más alta detectada de cada aplicación. Es el criterio estricto y devuelve muchas más filas — usa «Contar filas» antes de exportar.'
+          : excAlcance() === 'catalogo'
+          ? 'Usa tu estándar editado para todas las aplicaciones que tengan versión aprobada.'
+          : 'Solo las administradas, críticas y no permitidas.'}</span>
+      </div>` : ''}
       <textarea id="kqlBox" data-kqlsave="${sel}" spellcheck="false"
         style="width:100%;min-height:230px;background:var(--surface-2);border:1px solid var(--line);
                border-radius:9px;padding:12px;font-family:ui-monospace,Consolas,monospace;font-size:12px;
