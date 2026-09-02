@@ -416,6 +416,7 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const el = e.target;
+  if (el.id === 'psModo') { const h = $('#psAyuda'); if (h) h.innerHTML = AYUDA_MODO[el.value] || ''; return; }
   if (el.matches && el.matches('[data-fdim]')) {
     const d = el.getAttribute('data-fdim'), v = el.value;
     if (!v) delete S.f[d]; else S.f[d] = new Set([v]);
@@ -505,8 +506,8 @@ async function gxAction(a) {
   }
   if (a === 'ps') {
     const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));
-    const propia = !!($('#psPropia') || {}).checked;
-    return saveFile('extraer-defender.ps1', scriptPowerShell(lotes, propia), 'text/plain;charset=utf-8');
+    const modo = ($('#psModo') || {}).value || 'aplicacion';
+    return saveFile('extraer-defender.ps1', scriptPowerShell(lotes, modo), 'text/plain;charset=utf-8');
   }
   if (a === 'entrar') return conectar();
   if (a === 'salir') return desconectar();

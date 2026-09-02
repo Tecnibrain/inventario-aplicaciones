@@ -3637,7 +3637,7 @@ async function traerDeDefender(cuales, lotes) {
    trae su propio registro multi-tenant, asi que el usuario solo inicia sesion.
    El script deja los CSV listos para soltarlos en el tablero.
    ------------------------------------------------------------------------ */
-function scriptPowerShell(lotes, propia) {
+function scriptPowerShell(lotes, modo) {
   const q = s => String(s).replace(/\r/g, '');
   const g = CFG.graph || {};
   const bloques = [
@@ -3749,6 +3749,76 @@ function Exportar {
 }
 `;
 
+  const authApp = `
+# --- Autenticacion de APLICACION (client credentials) ------------------------
+# El permiso ThreatHunting.Read.All esta concedido como permiso de APLICACION,
+# no delegado: la app se autentica contra si misma y no hay usuario de por medio.
+# Eso evita tanto la asignacion de usuario como la URI de redireccion.
+#
+# El secreto NO va escrito en este archivo. Se pide al ejecutar, o se lee de la
+# variable de entorno DEFENDER_SECRET si prefieres automatizarlo sin teclearlo.
+$Client = '${kqlEsc(g.clientId || '')}'
+$Tenant = '${kqlEsc(g.tenantId || '')}'
+if (-not $Client -or -not $Tenant) { throw 'Faltan el Application ID y el Directory ID. Rellenalos en Origen de datos y vuelve a descargar el script.' }
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+if ($env:DEFENDER_SECRET) {
+    $plano = $env:DEFENDER_SECRET
+    Write-Host 'Usando el secreto de la variable de entorno DEFENDER_SECRET.' -ForegroundColor DarkGray
+} else {
+    Write-Host 'Pega el client secret (no se vera al escribir y no se guarda en ningun sitio):' -ForegroundColor Cyan
+    $seguro = Read-Host -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($seguro)
+    try { $plano = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+if (-not $plano) { throw 'No se recibio ningun secreto.' }
+
+Write-Host 'Solicitando token de aplicacion...' -ForegroundColor Cyan
+try {
+    $tok = Invoke-RestMethod -Method POST -Uri "https://login.microsoftonline.com/$Tenant/oauth2/v2.0/token" -Body @{
+        client_id     = $Client
+        client_secret = $plano
+        scope         = 'https://graph.microsoft.com/.default'
+        grant_type    = 'client_credentials'
+    }
+} catch {
+    $msg = $_.Exception.Message
+    try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error_description } catch { }
+    throw "No se pudo obtener el token: $msg"
+} finally {
+    # el secreto deja de estar en memoria en cuanto no hace falta
+    $plano = $null
+    [GC]::Collect()
+}
+$Token = $tok.access_token
+Write-Host 'Token obtenido. La aplicacion consulta en su propio nombre.' -ForegroundColor Green
+
+function Exportar {
+    param([string]$Nombre, [string]$Titulo, [string]$Kql)
+    Write-Host ("-> {0}: consultando..." -f $Titulo) -NoNewline
+    try {
+        $resp = Invoke-RestMethod -Method POST \`
+            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' \`
+            -Headers @{ Authorization = "Bearer $Token" } \`
+            -ContentType 'application/json' \`
+            -Body (@{ Query = $Kql } | ConvertTo-Json -Depth 4 -Compress)
+    } catch {
+        Write-Host ''
+        $msg = $_.Exception.Message
+        try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error.message } catch { }
+        Write-Host ("   ERROR: {0}" -f $msg) -ForegroundColor Red
+        return
+    }
+    $filas = $resp.results
+    if (-not $filas -or $filas.Count -eq 0) { Write-Host ' sin filas' -ForegroundColor DarkYellow; return }
+    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
+    $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
+    Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
+}
+`;
+
   const authModulo = `
 # --- Autenticacion con el modulo oficial de Microsoft ------------------------
 # Aviso: Microsoft.Graph.Authentication v2 suele fallar en Windows PowerShell 5.1
@@ -3799,8 +3869,9 @@ function Exportar {
   return `<#
     Inventario de Aplicaciones - extraccion desde Microsoft Defender
     Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
-    Modo: ${propia ? 'registro propio, sin modulo (funciona en PowerShell 5.1)'
-                   : 'modulo oficial de Microsoft (recomendado PowerShell 7)'}
+    Modo: ${modo === 'aplicacion' ? 'permiso de APLICACION con client secret (sin usuario)'
+          : modo === 'dispositivo' ? 'registro propio, codigo de dispositivo, sin modulo'
+          : 'modulo oficial de Microsoft (recomendado PowerShell 7)'}
 
     Uso:
       1. Abre PowerShell (no hace falta como administrador).
@@ -3813,11 +3884,11 @@ $ErrorActionPreference = 'Stop'
 $Salida = Join-Path $PSScriptRoot 'salida'
 if (-not $Salida) { $Salida = Join-Path (Get-Location) 'salida' }
 if (-not (Test-Path $Salida)) { New-Item -ItemType Directory -Path $Salida | Out-Null }
-${propia ? authRest : authModulo}${plantilla}${cuerpo}
+${modo === 'aplicacion' ? authApp : modo === 'dispositivo' ? authRest : authModulo}${plantilla}${cuerpo}
 Write-Host ''
 Write-Host ("Listo. Archivos en: {0}" -f $Salida) -ForegroundColor Cyan
 Write-Host 'Arrastralos TODOS a la vez sobre el tablero: se funden en un solo modelo.' -ForegroundColor Cyan
-${propia ? '' : 'Disconnect-MgGraph | Out-Null\n'}`;
+${modo === 'microsoft' || !modo ? 'Disconnect-MgGraph | Out-Null\n' : ''}`;
 }
 
 /* ---- 24.4 vista --------------------------------------------------------- */
@@ -3828,6 +3899,15 @@ function vDatos(A, rows) {
   const sel = (CFG.kql && CFG.kql.ver) || 'catalogo';
   const texto = (CFG.kql && CFG.kql[sel]) || (KQL[sel] ? KQL[sel].f() : '');
 
+  const AYUDA_MODO = {
+    aplicacion: 'La app se autentica contra sí misma: no hay usuario, así que no aplican ni la asignación ' +
+      'de usuario ni la URI de redirección. Es lo que corresponde si en API permissions tu permiso figura ' +
+      'como tipo <b>Aplicación</b>. El secreto se pide al ejecutar y no se guarda en el archivo.',
+    dispositivo: 'Inicias sesión tú con un código. Requiere el permiso como tipo <b>Delegado</b> y ' +
+      '<i>Allow public client flows → Yes</i>. No instala ningún módulo.',
+    microsoft: 'Usa la aplicación registrada por Microsoft, sin configurar nada tuyo. Requiere el módulo ' +
+      '<code>Microsoft.Graph.Authentication</code>, que falla en Windows PowerShell 5.1: usa PowerShell 7.'
+  };
   const fuentes = M.sources.length ? `<div class="mt-wrap"><div class="mt-scroll"><table class="mt">
       <thead><tr><th>Archivo</th><th>Forma</th><th class="n">Filas</th><th class="n">Equipos</th>
         <th>Estado</th><th style="width:46px"></th></tr></thead>
@@ -3970,14 +4050,14 @@ function vDatos(A, rows) {
           Ese módulo <b>ya está registrado por Microsoft</b>, así que no creas ninguna aplicación en Entra:
           solo inicias sesión con tu cuenta de siempre. Lanza tus tres consultas y escribe los CSV en una
           carpeta <code>salida</code>, que arrastras aquí de una vez.</p>
-          <label class="chk" style="margin-bottom:12px">
-            <input type="checkbox" id="psPropia"${(CFG.graph || {}).clientId ? '' : ' disabled'}>
-            Usar mi propio registro, sin módulo${(CFG.graph || {}).clientId ? '' : ' (rellena antes los identificadores abajo)'}
-          </label>
-          <p class="mini" style="margin:-6px 0 12px">Habla directamente con OAuth: <b>no instala ningún módulo</b>
-            y <b>no usa URI de redirección</b>. Es la opción que funciona en Windows PowerShell 5.1, donde
-            <code>Microsoft.Graph.Authentication</code> falla con <i>TypeLoadException</i>.
-            La app necesita <i>Authentication → Allow public client flows → Yes</i>.</p>
+          <div class="fld"><label for="psModo">Cómo se autentica</label>
+            <select id="psModo">
+              <option value="aplicacion">Permiso de aplicación · client secret (sin usuario)</option>
+              <option value="dispositivo">Mi registro · código de dispositivo (permiso delegado)</option>
+              <option value="microsoft">App de Microsoft · módulo Graph (permiso delegado)</option>
+            </select>
+            <span class="hint" id="psAyuda">${AYUDA_MODO.aplicacion}</span>
+          </div>
           <div class="fld"><label for="psLotes">Lotes del detalle completo (0 = no traerlo)</label>
             <input id="psLotes" type="number" min="0" max="64" value="0">
             <span class="hint">Solo si necesitas el inventario crudo. Con tu parque son ~1,3 millones de filas:
@@ -4477,6 +4557,7 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const el = e.target;
+  if (el.id === 'psModo') { const h = $('#psAyuda'); if (h) h.innerHTML = AYUDA_MODO[el.value] || ''; return; }
   if (el.matches && el.matches('[data-fdim]')) {
     const d = el.getAttribute('data-fdim'), v = el.value;
     if (!v) delete S.f[d]; else S.f[d] = new Set([v]);
@@ -4566,8 +4647,8 @@ async function gxAction(a) {
   }
   if (a === 'ps') {
     const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));
-    const propia = !!($('#psPropia') || {}).checked;
-    return saveFile('extraer-defender.ps1', scriptPowerShell(lotes, propia), 'text/plain;charset=utf-8');
+    const modo = ($('#psModo') || {}).value || 'aplicacion';
+    return saveFile('extraer-defender.ps1', scriptPowerShell(lotes, modo), 'text/plain;charset=utf-8');
   }
   if (a === 'entrar') return conectar();
   if (a === 'salir') return desconectar();
