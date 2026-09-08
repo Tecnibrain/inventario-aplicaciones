@@ -569,6 +569,21 @@ function Exportar {
    El C# va dentro de esta plantilla, asi que sus barras invertidas van dobladas.
    ------------------------------------------------------------------------ */
 function scriptResumir() {
+  // El estandar viaja dentro del script, igual que el datatable de la consulta
+  // de excepciones. Aqui NO se filtra por alcance: el alcance decide que puntua
+  // en el tablero, y exige estar en el 90 % del parque, cosa que casi ninguna
+  // aplicacion cumple. Filtrando por el, el estandar salia vacio y el script
+  // caia en el corte duro, que es lo que produce archivos de cientos de MB.
+  // Van ordenadas por equipos, de mas a menos, para que -TopApps corte por donde
+  // duele menos.
+  const cuantos = k => ((M.aggFull && M.aggFull.appDev.get(k)) || { size: 0 }).size;
+  const reglas = Object.keys(CFG.apps || {})
+    .filter(k => (CFG.apps[k] || {}).rec)
+    .sort((a, b) => cuantos(b) - cuantos(a))
+    .map(k => { const i = k.indexOf(' / '); return [k.slice(0, i), k.slice(i + 3), CFG.apps[k].rec]; });
+  const estandar = reglas.map(([v, a, r]) =>
+    `$E['${psEsc(v)}' + $S + '${psEsc(a)}'] = '${psEsc(r)}'`).join('\n');
+
   return `<#
     Inventario de Aplicaciones - resumir un detalle crudo demasiado grande
     Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
@@ -581,7 +596,18 @@ function scriptResumir() {
       Pero abrirlo entero no hace falta. De ese archivo salen tres cosas mucho
       mas pequeñas, recorriendolo sin cargarlo en memoria:
 
-        resumen_catalogo.csv     lo que esta en la version mas alta
+      ${reglas.length
+        ? `Corte: tu ESTANDAR, ${reglas.length} aplicacion(es). Una instalacion es
+      excepcion si va por debajo de la version aprobada de su aplicacion.
+      Si aun asi el archivo sale demasiado grande, acota con -TopApps 300, que se
+      queda con las 300 aplicaciones mas instaladas, o con -Apps.`
+        : `Corte: la version MAS ALTA vista, porque no habia estandar cargado.
+      Cuidado, es un baremo durisimo: basta que un equipo tenga una compilacion
+      mas nueva para que todos los demas salgan atrasados, y con miles de
+      aplicaciones eso son gigabytes. Carga antes el parque y el catalogo en el
+      tablero y vuelve a descargar este script: llevara tu estandar dentro.`}
+
+        resumen_catalogo.csv     lo que no es excepcion
         resumen_parque.csv       un registro por equipo
         resumen_excepciones.csv  QUE equipo tiene QUE version por detras
 
@@ -598,6 +624,7 @@ function scriptResumir() {
     Uso:
       .\\resumir-detalle.ps1 -Ruta 'C:\\ruta\\salida\\detalle.csv'
       .\\resumir-detalle.ps1 -Ruta '...' -Apps 'Chrome','Java'   # solo esas
+      .\\resumir-detalle.ps1 -Ruta '...' -Todas                   # corte por version mas alta
       .\\resumir-detalle.ps1 -Ruta '...' -SinExcepciones          # las dos primeras
 
     Arrastra los TRES archivos al tablero, a la vez.
@@ -606,7 +633,9 @@ function scriptResumir() {
 param(
     [string]$Ruta,
     [string[]]$Apps,
-    [switch]$SinExcepciones
+    [switch]$SinExcepciones,
+    [switch]$Todas,
+    [int]$TopApps = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -618,6 +647,18 @@ $Ruta = (Resolve-Path $Ruta).Path
 $info = Get-Item $Ruta
 Write-Host ("Archivo: {0}  ({1:n1} MB)" -f $info.Name, ($info.Length / 1MB)) -ForegroundColor Cyan
 if ($Apps) { Write-Host ("Solo aplicaciones que contengan: {0}" -f ($Apps -join ', ')) -ForegroundColor Cyan }
+
+# El estandar del tablero, tal y como estaba al generar este script.
+$S = [char]1
+$E = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+${estandar}
+if ($Todas) { $E.Clear() }
+if ($TopApps -gt 0) { Write-Host ("Acotado a las {0} aplicaciones mas instaladas" -f $TopApps) -ForegroundColor Cyan }
+if ($E.Count -gt 0) {
+    Write-Host ("Corte: tu estandar, {0} aplicaciones con version aprobada" -f $E.Count) -ForegroundColor Cyan
+} else {
+    Write-Host 'Corte: la version mas alta vista. Baremo estricto: esto puede salir enorme.' -ForegroundColor Yellow
+}
 
 # En PowerShell puro, un bucle de varios millones de vueltas tarda mas que todo
 # lo demas junto. Compilado, el limite pasa a ser el disco.
@@ -773,6 +814,25 @@ public class Resumidor
         return true;
     }
 
+    // Una sola definicion de «esto va atrasado», para que el catalogo y las
+    // excepciones sean complementarios de verdad: lo que no es excepcion va al
+    // catalogo, y al reves. Si cada uno lo decidiera por su cuenta, una
+    // instalacion podria colarse en los dos o en ninguno.
+    static bool EsExcepcion(string ven, string app, string ver,
+                            Dictionary<string, string> estandar,
+                            Dictionary<string, string> maxVer)
+    {
+        string tope;
+        string clave = ven + "\\u0001" + app;
+        if (estandar != null && estandar.Count > 0)
+        {
+            // Fuera del estandar no hay nada que reclamar.
+            if (!estandar.TryGetValue(clave, out tope)) return false;
+        }
+        else if (!maxVer.TryGetValue(clave, out tope)) return false;
+        return CmpVer(ver, tope) < 0;
+    }
+
     static bool Interesa(string app, string[] filtro)
     {
         if (filtro == null || filtro.Length == 0) return true;
@@ -782,7 +842,8 @@ public class Resumidor
     }
 
     public static string Procesar(string ruta, string salidaCat, string salidaPar,
-                                  string salidaExc, string[] filtro)
+                                  string salidaExc, string[] filtro,
+                                  Dictionary<string, string> estandar, int topApps)
     {
         Dictionary<string, int> apps = new Dictionary<string, int>(StringComparer.Ordinal);
         Dictionary<string, string> maxVer = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -823,6 +884,35 @@ public class Resumidor
             }
         }
 
+        // -TopApps: quedarse con las N aplicaciones mas instaladas. Se decide con
+        // las cuentas de la pasada 1, no con el orden del archivo, para que el
+        // recorte sea por relevancia y no por donde cayeron las filas.
+        if (topApps > 0)
+        {
+            Dictionary<string, long> porApp = new Dictionary<string, long>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, int> kv in apps)
+            {
+                string[] pp = kv.Key.Split('\\u0001');
+                string ka = pp[0] + "\\u0001" + pp[1];
+                long acc;
+                porApp.TryGetValue(ka, out acc);
+                porApp[ka] = acc + kv.Value;
+            }
+            List<KeyValuePair<string, long>> orden = new List<KeyValuePair<string, long>>(porApp);
+            orden.Sort(delegate(KeyValuePair<string, long> x, KeyValuePair<string, long> y)
+                       { return y.Value.CompareTo(x.Value); });
+            HashSet<string> quedan = new HashSet<string>(StringComparer.Ordinal);
+            for (int t = 0; t < orden.Count && t < topApps; t++) quedan.Add(orden[t].Key);
+            Dictionary<string, string> podado = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string ka in quedan)
+            {
+                string v;
+                if (estandar != null && estandar.TryGetValue(ka, out v)) podado[ka] = v;
+                else if (maxVer.TryGetValue(ka, out v)) podado[ka] = v;
+            }
+            estandar = podado;
+        }
+
         // Si van a salir excepciones, el catalogo lleva SOLO lo que esta en la
         // version mas alta. Lo demas va en el otro archivo con nombre de equipo,
         // y contarlo en los dos sitios duplicaria cada instalacion atrasada.
@@ -834,12 +924,7 @@ public class Resumidor
             foreach (KeyValuePair<string, int> kv in apps)
             {
                 string[] partes = kv.Key.Split('\\u0001');
-                if (soloAlMaximo)
-                {
-                    string alta;
-                    if (maxVer.TryGetValue(partes[0] + "\\u0001" + partes[1], out alta) &&
-                        CmpVer(partes[2], alta) < 0) continue;
-                }
+                if (soloAlMaximo && EsExcepcion(partes[0], partes[1], partes[2], estandar, maxVer)) continue;
                 w.WriteLine(Csv(partes[0]) + "," + Csv(partes[1]) + "," + Csv(partes[2]) + "," +
                             kv.Value.ToString(CultureInfo.InvariantCulture));
                 escritas++;
@@ -875,12 +960,14 @@ public class Resumidor
                     if (!Interesa(app, filtro)) continue;
 
                     string ven = Campo(f, iVen), ver = Campo(f, iVer);
-                    string alta;
-                    if (!maxVer.TryGetValue(ven + "\\u0001" + app, out alta)) continue;
-                    if (CmpVer(ver, alta) >= 0) continue;
+                    if (!EsExcepcion(ven, app, ver, estandar, maxVer)) continue;
+
+                    string tope, clave = ven + "\\u0001" + app;
+                    if (estandar == null || estandar.Count == 0 || !estandar.TryGetValue(clave, out tope))
+                        maxVer.TryGetValue(clave, out tope);
 
                     w.WriteLine(Csv(dev) + "," + Csv(Campo(f, iUsr)) + "," + Csv(ven) + "," + Csv(app) + "," +
-                                Csv(ver) + "," + Csv(alta) + "," + Csv(Campo(f, iOsV)));
+                                Csv(ver) + "," + Csv(tope) + "," + Csv(Campo(f, iOsV)));
                     excep++;
                 }
             }
@@ -901,7 +988,7 @@ $salidaExc = if ($SinExcepciones) { $null } else { Join-Path $carpeta 'resumen_e
 
 Write-Host 'Recorriendo el archivo. No se carga en memoria; con varios GB tarda unos minutos...' -ForegroundColor Cyan
 $reloj = [Diagnostics.Stopwatch]::StartNew()
-$res = [Resumidor]::Procesar($Ruta, $salidaCat, $salidaPar, $salidaExc, $Apps)
+$res = [Resumidor]::Procesar($Ruta, $salidaCat, $salidaPar, $salidaExc, $Apps, $E, $TopApps)
 $reloj.Stop()
 
 if (-not $res.StartsWith('OK|')) { throw $res }
@@ -917,11 +1004,17 @@ if ($salidaExc) {
     Write-Host ("  {0,12:n0} desactualizados     -> {1}" -f $nExc, (Split-Path $salidaExc -Leaf)) -ForegroundColor Green
     $mb = (Get-Item $salidaExc).Length / 1MB
     Write-Host ("  {0,12:n1} MB de excepciones" -f $mb) -ForegroundColor DarkGray
-    if ($nExc -gt 400000) {
+    if ($mb -gt 400) {
         Write-Host ''
-        Write-Host 'AVISO: son muchas filas para el navegador.' -ForegroundColor Yellow
+        Write-Host ('AVISO: {0:n0} MB no entran en el tablero, que corta en 400 MB.' -f $mb) -ForegroundColor Yellow
         Write-Host 'No se ha recortado nada a proposito: un recorte silencioso sesga el analisis.' -ForegroundColor Yellow
-        Write-Host "Si no entra, vuelve a lanzarlo acotado:  -Apps 'Chrome','Java'" -ForegroundColor Yellow
+        if ($E.Count -eq 0) {
+            Write-Host 'Lo mas probable es el corte: sin estandar se compara contra la version mas' -ForegroundColor Yellow
+            Write-Host 'alta vista, y casi todo queda por debajo. Carga parque y catalogo en el' -ForegroundColor Yellow
+            Write-Host 'tablero, vuelve a descargar el script y repite: llevara tu estandar dentro.' -ForegroundColor Yellow
+        } else {
+            Write-Host "Acotalo mas:  -Apps 'Chrome','Java'   o ajusta el alcance en Administracion." -ForegroundColor Yellow
+        }
     }
 }
 Write-Host ''
