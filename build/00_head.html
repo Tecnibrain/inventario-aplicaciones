@@ -3,8 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Lo que el navegador tiene PROHIBIDO hacer con tus datos.
+     No es una promesa del codigo: es el navegador quien lo impide. La unica
+     salida permitida es Microsoft, y solo si pulsas conectar. Cualquier otra
+     cosa -una imagen, una fuente, un formulario, un fetch a donde sea- queda
+     bloqueada y avisa por consola. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; font-src data:; img-src data: blob:; connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com; form-action 'none'; base-uri 'none'">
 <title>Inventario de Aplicaciones</title>
 <meta name="description" content="Plataforma de gestion de software e inventario Intune: cumplimiento, control de versiones, informes para cliente y tendencias. Procesa Excel/CSV localmente en el navegador.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@500;700;900&family=Red+Hat+Text:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Sin <link> a ninguna parte: las tipografias van dentro del archivo.
+     Eran la unica peticion que la pagina hacia sola, sin pulsar nada. -->
