@@ -167,15 +167,45 @@ el CSV listo. Tres informes, que son las tres formas que el modelo sabe fusionar
 
 Permiso necesario: **`DeviceManagementManagedDevices.Read.All`**, uno solo, para los tres.
 
-### El detalle crudo no cabe, y no es cuestión de optimizar
+### El detalle crudo: arrástralo, aunque pese gigabytes
 
-`AppInvRawData` de un parque de 27.000 equipos son **gigabytes**. El navegador no puede con eso:
-`arrayBuffer()` reserva el archivo entero y decodificarlo a texto lo **duplica**, porque las cadenas
-de JavaScript son UTF-16. Por encima de **400 MB** la aplicación ni lo intenta, porque intentarlo
-tumba la pestaña y se lleva por delante lo que ya estuviera cargado.
+El problema nunca fue *leer* el archivo, fue *guardarlo*. `arrayBuffer()` reserva el fichero entero
+y decodificarlo a texto lo **duplica**, porque las cadenas de JavaScript son UTF-16; además 1,7 GB
+de texto pasan del tamaño máximo de cadena de V8, así que ni siquiera llega a fallar por memoria:
+falla antes.
 
-Para eso está **`resumir-detalle.ps1`**: recorre el archivo en el equipo, sin cargarlo en memoria,
-y saca de él lo que el tablero sí usa.
+Recorrerlo, en cambio, no cuesta nada. Por encima de **400 MB** el archivo se lee **por trozos**:
+se cuenta cada uno y se suelta, y lo que queda en memoria es el resumen. Con barra de progreso,
+porque tarda.
+
+Medido en Chrome con 414 MB y 1.276.473 filas de 26.863 equipos: **22 segundos**. Salen tres
+fuentes de una sola pasada doble por el archivo:
+
+| Sale | Forma | Contenido |
+| ---- | ----- | --------- |
+| parque | parque | un registro por equipo |
+| catálogo | agregado | aplicación, versión y número de equipos |
+| atrasados | detalle | *qué* equipo va por detrás del estándar |
+
+Son **complementarias**: cada instalación cae en una y solo en una. En la prueba, 994.999 en el
+catálogo + 281.474 atrasadas = 1.276.473, exactamente las filas leídas.
+
+El estándar se siembra solo, entre las dos pasadas: la primera saca el catálogo, el tablero deduce
+la versión aprobada de cada aplicación, y la segunda usa esa versión como corte.
+
+**Si no caben todos los nombres**, el recorte se decide *antes* de la segunda pasada y **por
+volumen**, no por el orden del archivo — recortar a mitad de lectura sesga igual que un `sort by`.
+Las aplicaciones que queden fuera se dicen por su nombre y **siguen contadas en el catálogo**: solo
+se pierden sus nombres de equipo, no sus instalaciones.
+
+Y si luego quieres los nombres de una aplicación concreta, la ficha de esa aplicación trae un botón
+que vuelve a recorrer el archivo solo para ella. La página guarda el `File`, que es un puntero al
+disco y no ocupa memoria.
+
+### La alternativa fuera del navegador
+
+**`resumir-detalle.ps1`** hace lo mismo desde PowerShell, por si prefieres dejar los CSV en disco,
+automatizarlo o compartirlos.
 
 | Sale | Forma | Contenido |
 | ---- | ----- | --------- |

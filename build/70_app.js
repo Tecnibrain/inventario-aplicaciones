@@ -325,6 +325,19 @@ document.addEventListener('click', async e => {
   if ((el = cl('[data-kql]'))) {
     CFG.kql = CFG.kql || {}; CFG.kql.ver = el.getAttribute('data-kql'); cfgSave(); render(); return;
   }
+  if ((el = cl('[data-traeapp]'))) {
+    const clave = el.getAttribute('data-traeapp');
+    if (!M.archivo) { toast('El archivo original ya no está a mano; vuelve a arrastrarlo'); return; }
+    const app = clave.slice(clave.indexOf(' / ') + 3);
+    // Se rehace la importacion con esta aplicacion en la lista de las completas.
+    // Recorrer el archivo otra vez sale barato; mantener a mano la particion
+    // cuadrada entre catalogo y detalle, no.
+    const lista = (M.completo || []).concat([app]);
+    await importarPorTrozos(M.archivo, (M.archivo.size || 0) / 1048576, { completo: lista });
+    location.hash = '#app=' + encodeURIComponent(clave);
+    readHash(); render();
+    return;
+  }
   if ((el = cl('[data-rmsrc]'))) {
     const v = el.getAttribute('data-rmsrc');
     if (v === 'todas') {
@@ -644,19 +657,58 @@ function fail(msg) {
 const TOPE_MB = 400;
 const AVISO_MB = 150;
 
+/** Lee un archivo enorme por trozos y se queda con el resumen. */
+async function importarPorTrozos(file, mb, opts) {
+  const tam = mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
+  const bar = $('#progBar'), pct = $('#progPct'), fase = $('#progFase'), caja = $('#progGrande');
+  dropErr.classList.remove('on');
+  $('#dropScreen').hidden = false; $('#app').hidden = true; $('#topActions').hidden = true;
+  caja.hidden = false;
+  $('#progNota').textContent = `${truncate(file.name, 34)} · ${tam}. No se carga en memoria: se recorre ` +
+    `y solo se guarda el resumen. Puede tardar unos minutos; no cierres la pestaña.`;
+
+  try {
+    const r = await importarGrande(file, opts || {}, (frac, filas, etapa) => {
+      bar.style.width = Math.round(frac * 100) + '%';
+      pct.textContent = Math.round(frac * 100) + ' %';
+      fase.textContent = etapa + (filas ? ` · ${fmt(filas)} filas` : '');
+    });
+    caja.hidden = true;
+    S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {};
+    $('#qGlobal').value = '';
+    $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
+    document.title = (CFG.org ? CFG.org + ' · ' : '') + 'Inventario de Aplicaciones';
+    readHash(); render(); window.scrollTo({ top: 0 });
+    toast(`${fmt(r.filas)} filas recorridas · ${fmt(r.equipos)} equipos · ` +
+          `${fmt(r.atrasados)} instalaciones atrasadas con nombre`);
+    if (r.fuera) {
+      // Nada se recorta en silencio: se dice cuanto y de que.
+      toast(`${fmt(r.fuera)} aplicaciones sin nombres de equipo (${fmt(r.fueraFilas)} filas, ` +
+            `no caben): ${r.fueraApps.map(a => truncate(a, 20)).join(', ')}…  ` +
+            `Siguen contadas en el catálogo.`);
+    }
+  } catch (err) {
+    caja.hidden = true;
+    console.error(err);
+    fail(err && err.message ? err.message : String(err));
+  }
+}
+
 async function loadFile(file, añadir) {
   if (!file) return;
   dropErr.classList.remove('on'); dropCard.classList.remove('hot');
   const name = file.name || 'archivo';
   const mb = (file.size || 0) / 1048576;
-  if (mb > TOPE_MB) {
-    fail(`«${truncate(name, 30)}» pesa ${mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'}, ` +
-         `y el límite del navegador está en ${TOPE_MB} MB. No se intenta abrir: intentarlo tumba la pestaña ` +
-         `y se lleva por delante lo que ya tuvieras cargado.\n\n` +
-         `El detalle crudo de un parque grande no cabe aquí, y tampoco hace falta: resúmelo antes con ` +
-         `resumir-detalle.ps1 (Origen de datos → Intune), que lo recorre en tu equipo sin cargarlo en ` +
-         `memoria y deja un catálogo y un parque de unos pocos MB. O tráelo acotado con un filtro.`);
-    return;
+  const grande = mb > TOPE_MB;
+  if (grande) {
+    // Demasiado grande para cargarlo, pero no para recorrerlo. Se lee por trozos
+    // y solo se guarda el resumen, que es lo que el tablero usa de verdad.
+    if (!file.stream) {
+      fail('Este navegador no sabe leer archivos por trozos, y ' + fmt(Math.round(mb)) +
+           ' MB no caben de una vez. Usa Chrome o Edge, o resúmelo antes con resumir-detalle.ps1.');
+      return;
+    }
+    return importarPorTrozos(file, mb);
   }
   if (mb > AVISO_MB) toast(`${Math.round(mb)} MB: esto va a tardar. No cierres la pestaña.`);
   try {

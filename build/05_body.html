@@ -60,6 +60,16 @@
       <button class="btn" id="btnConectar" style="padding:11px 22px;font-size:13.5px"
               title="Script de PowerShell o conexion directa con tu cuenta">Conectar con Defender</button>
     </div>
+    <div id="progGrande" hidden style="margin:18px auto 0;max-width:520px;text-align:left">
+      <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-3);margin-bottom:7px">
+        <b id="progFase">Recorriendo el archivo</b><span id="progPct" class="mono">0 %</span>
+      </div>
+      <div style="height:7px;border-radius:4px;background:var(--surface-2);overflow:hidden">
+        <div id="progBar" style="height:100%;width:0;background:var(--brand);transition:width .25s"></div>
+      </div>
+      <p class="mini" id="progNota" style="margin:9px 0 0">El archivo no se carga en memoria: se recorre y
+        solo se guarda el resumen. Puede tardar unos minutos; no cierres la pestaña.</p>
+    </div>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt" multiple hidden>
     <input type="file" id="cfgFile" accept=".json,application/json" hidden>
     <p class="mini" style="margin:14px auto 0;max-width:470px;color:var(--ink-4)">

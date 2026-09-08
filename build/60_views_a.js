@@ -378,6 +378,24 @@ function enVersion(key, rec, devVer) {
   devVer.forEach(v => { if (!VER_UNK.test(v) && verCmp(v, rec) >= 0) n++; });
   return fmt1(pct(n, devVer.size)) + ' %';
 }
+/**
+ * Por que una aplicacion no tiene nombres de equipo, y como conseguirlos.
+ * Solo se extraen los de lo que va por detras del estandar: es justo lo que
+ * separa unos pocos MB de varios GB.
+ */
+function vacioSinNombres(key) {
+  const app = key.slice(key.indexOf(' / ') + 3);
+  const cabeza = 'De esta selección no se conoce el nombre de ningún equipo.<br>' +
+    '<span style="font-size:12px">Solo se extraen los de lo que va <b>por detrás</b> del estándar; ' +
+    'lo que está al día se cuenta, pero no se nombra.</span>';
+  // Si el archivo original sigue a mano, se recorre otra vez y ya.
+  if (M.archivo) return cabeza +
+    `<br><button class="btn btn-p" data-traeapp="${esc(key)}" style="margin-top:12px">` +
+    `Traer los equipos de esta aplicación</button>`;
+  return cabeza + '<br><span style="font-size:12px">Para tenerlos:</span><br>' +
+    `<code>.\\resumir-detalle.ps1 -Ruta '...' -Completo '${esc(app)}'</code>`;
+}
+
 function vApp(A, rows, key) {
   const r = rule(key) || {}, o = CMP.app.get(key);
   const vm = A.appVerDev.get(key) || new Map();
@@ -457,13 +475,7 @@ function vApp(A, rows, key) {
     `</div>` +
     sec('Equipos con esta aplicación') +
     mtable({ id:'appDev', title:'Equipos afectados',
-      vacio: total
-        ? 'De esta selección no se conoce el nombre de ningún equipo.<br>' +
-          '<span style="font-size:12px">El detalle por equipo solo se extrae de lo que va <b>por detrás</b> ' +
-          'del estándar; lo que está al día se cuenta, pero no se nombra. Para tener los nombres de esta ' +
-          'aplicación entera:<br><code>.\\resumir-detalle.ps1 -Ruta \'...\' -Completo ' +
-          `'${esc((A.appMeta.get(key) || {}).app || '')}'</code></span>`
-        : 'Sin resultados',
+      vacio: !total ? 'Sin resultados' : vacioSinNombres(key),
       sub: devTbl.length < total
         ? `${fmt(devTbl.length)} de ${fmt(total)} equipos, los que se conoce el nombre. ` +
           `El resto viene de un catálogo agregado, que cuenta cuántos hay en cada versión pero no cuáles`

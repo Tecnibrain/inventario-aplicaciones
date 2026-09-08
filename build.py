@@ -25,6 +25,7 @@ PARTES = [
     '05_body.html',      # cierre de <style>, marcado estatico, apertura de <script>
     '30_engine_io.js',   # lectores XLSX/CSV, fechas, deteccion de columnas, datos geo
     '36_model.js',       # modelo multifuente: detalle, agregado y parque
+    '38_stream.js',      # lectura por trozos de archivos que no caben en memoria
     '40_engine_viz.js',  # agregacion y motor de graficos SVG
     '50_core.js',        # estado, rutas, catalogo, cumplimiento, historico
     '60_views_a.js',     # resumen, cumplimiento, aplicaciones, equipos
