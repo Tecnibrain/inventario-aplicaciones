@@ -181,10 +181,25 @@ y saca de él lo que el tablero sí usa.
 | ---- | ----- | --------- |
 | `resumen_catalogo.csv` | agregado | aplicación, versión y número de equipos |
 | `resumen_parque.csv`   | parque   | un registro por equipo |
+| `resumen_excepciones.csv` | detalle | *qué* equipo va por detrás del estándar |
 
-De gigabytes salen unos pocos MB **sin perder ningún equipo ni ninguna versión**. Lo que sí se
-pierde es saber *qué* equipo tiene *qué* aplicación; si hace falta ese cruce, trae el detalle
-acotado con un filtro en vez de entero.
+Los tres son **complementarios**: cada instalación sale en uno y solo en uno, así que las cuentas
+no se duplican al fundirlos. Hay que cargar los tres — con solo el catálogo verías únicamente lo
+que ya está al día.
+
+El corte de las excepciones es **tu estándar**, que viaja dentro del script: carga primero parque y
+catálogo, deja que el tablero lo siembre, y descarga el script después. Si no hay estándar, el corte
+es la versión más alta vista, que es durísimo y produce archivos enormes.
+
+De los nombres de equipo solo se extraen los de lo que va **atrasado**: es lo que hace que de
+gigabytes salgan megas. Cuando quieras los de una aplicación entera, al día incluida:
+
+```powershell
+.\resumir-detalle.ps1 -Ruta '...' -Completo 'Microsoft Edge'
+```
+
+Para acotar el tamaño hay dos mandos más, y ninguno recorta en silencio: `-TopApps N` se queda con
+las N aplicaciones más instaladas, y `-Apps` filtra por nombre.
 
 Va en C# compilado al vuelo: en PowerShell puro, un bucle de varios millones de vueltas tarda más
 que todo lo demás junto. Lee el CSV respetando comillas, comas dentro de los campos y saltos de

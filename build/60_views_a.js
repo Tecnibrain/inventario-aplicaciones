@@ -64,7 +64,7 @@ function mtable(o) {
     `${c.w ? ` style="width:${c.w}"` : ''}>${esc(c.l)}<span>${st.k === c.k ? (st.d > 0 ? '▲' : '▼') : '↕'}</span></th>`).join('');
   const tb = shown.map(r => `<tr${o.rowAttr ? ' ' + o.rowAttr(r) : ''}>` +
     o.cols.map(c => `<td class="${c.n ? 'n' : ''}${c.cls ? ' ' + c.cls : ''}">${o.cell(r, c)}</td>`).join('') + '</tr>').join('')
-    || `<tr><td colspan="${o.cols.length}" style="text-align:center;padding:28px;color:var(--ink-4)">Sin resultados</td></tr>`;
+    || `<tr><td colspan="${o.cols.length}" style="text-align:center;padding:28px;color:var(--ink-4)">${o.vacio || 'Sin resultados'}</td></tr>`;
   return `<div class="mt-wrap">
     <div class="mt-bar"><h3>${o.title}</h3>${o.sub ? `<span class="mini">${o.sub}</span>` : ''}
       ${o.tools || ''}
@@ -457,6 +457,13 @@ function vApp(A, rows, key) {
     `</div>` +
     sec('Equipos con esta aplicación') +
     mtable({ id:'appDev', title:'Equipos afectados',
+      vacio: total
+        ? 'De esta selección no se conoce el nombre de ningún equipo.<br>' +
+          '<span style="font-size:12px">El detalle por equipo solo se extrae de lo que va <b>por detrás</b> ' +
+          'del estándar; lo que está al día se cuenta, pero no se nombra. Para tener los nombres de esta ' +
+          'aplicación entera:<br><code>.\\resumir-detalle.ps1 -Ruta \'...\' -Completo ' +
+          `'${esc((A.appMeta.get(key) || {}).app || '')}'</code></span>`
+        : 'Sin resultados',
       sub: devTbl.length < total
         ? `${fmt(devTbl.length)} de ${fmt(total)} equipos, los que se conoce el nombre. ` +
           `El resto viene de un catálogo agregado, que cuenta cuántos hay en cada versión pero no cuáles`

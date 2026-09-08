@@ -628,6 +628,12 @@ function scriptResumir() {
       .\\resumir-detalle.ps1 -Ruta 'C:\\ruta\\salida\\detalle.csv'
       .\\resumir-detalle.ps1 -Ruta '...' -Apps 'Chrome','Java'   # solo esas
       .\\resumir-detalle.ps1 -Ruta '...' -Todas                   # corte por version mas alta
+      .\\resumir-detalle.ps1 -Ruta '...' -Completo 'Microsoft Edge'
+
+    -Completo saca TODAS las instalaciones de esas aplicaciones con nombre de
+    equipo, esten al dia o no. Es lo que hace falta para responder «quien tiene
+    esta version», porque de lo que esta al dia normalmente solo se cuenta
+    cuantos son. Una aplicacion en un parque de 27.000 equipos son 27.000 filas.
       .\\resumir-detalle.ps1 -Ruta '...' -SinExcepciones          # las dos primeras
 
     Arrastra los TRES archivos al tablero, a la vez.
@@ -638,7 +644,8 @@ param(
     [string[]]$Apps,
     [switch]$SinExcepciones,
     [switch]$Todas,
-    [int]$TopApps = 0
+    [int]$TopApps = 0,
+    [string[]]$Completo
 )
 
 $ErrorActionPreference = 'Stop'
@@ -836,6 +843,15 @@ public class Resumidor
         return CmpVer(ver, tope) < 0;
     }
 
+    // Como Interesa, pero con la lista vacia NO entra nada: -Completo es opt-in.
+    static bool EsCompleto(string app, string[] completos)
+    {
+        if (completos == null || completos.Length == 0) return false;
+        for (int i = 0; i < completos.Length; i++)
+            if (app.IndexOf(completos[i], StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        return false;
+    }
+
     static bool Interesa(string app, string[] filtro)
     {
         if (filtro == null || filtro.Length == 0) return true;
@@ -846,7 +862,8 @@ public class Resumidor
 
     public static string Procesar(string ruta, string salidaCat, string salidaPar,
                                   string salidaExc, string[] filtro,
-                                  Dictionary<string, string> estandar, int topApps)
+                                  Dictionary<string, string> estandar, int topApps,
+                                  string[] completos, string salidaDet)
     {
         Dictionary<string, int> apps = new Dictionary<string, int>(StringComparer.Ordinal);
         Dictionary<string, string> maxVer = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -919,7 +936,7 @@ public class Resumidor
         // Si van a salir excepciones, el catalogo lleva SOLO lo que esta en la
         // version mas alta. Lo demas va en el otro archivo con nombre de equipo,
         // y contarlo en los dos sitios duplicaria cada instalacion atrasada.
-        bool soloAlMaximo = salidaExc != null;
+        bool soloAlMaximo = !string.IsNullOrEmpty(salidaExc);
         long escritas = 0;
         using (StreamWriter w = new StreamWriter(salidaCat, false, new UTF8Encoding(true)))
         {
@@ -927,6 +944,8 @@ public class Resumidor
             foreach (KeyValuePair<string, int> kv in apps)
             {
                 string[] partes = kv.Key.Split('\\u0001');
+                // Lo que se lleva el detalle completo no vuelve a contarse aqui.
+                if (EsCompleto(partes[1], completos)) continue;
                 if (soloAlMaximo && EsExcepcion(partes[0], partes[1], partes[2], estandar, maxVer)) continue;
                 w.WriteLine(Csv(partes[0]) + "," + Csv(partes[1]) + "," + Csv(partes[2]) + "," +
                             kv.Value.ToString(CultureInfo.InvariantCulture));
@@ -944,40 +963,55 @@ public class Resumidor
             }
         }
 
-        long excep = 0;
-        if (salidaExc != null)
+        long excep = 0, det = 0;
+        if (!string.IsNullOrEmpty(salidaExc))
         {
             // --- pasada 2: QUE equipo va por detras. Es lo unico que el catalogo
             // agregado no puede dar, y es una fraccion pequena del archivo.
-            using (StreamReader r = new StreamReader(ruta, Encoding.UTF8, true, 1 << 20))
-            using (StreamWriter w = new StreamWriter(salidaExc, false, new UTF8Encoding(true)))
+            const string CAB = "DeviceName,UserName,SoftwareVendor,SoftwareName,SoftwareVersion,Aprobada,OSVersionInfo";
+            StreamWriter wd = null;
+            try
             {
-                cab.Clear();
-                if (!Cabecera(r, cab, out error)) return error;
-                w.WriteLine("DeviceName,UserName,SoftwareVendor,SoftwareName,SoftwareVersion,Aprobada,OSVersionInfo");
-                while (LeerFila(r, f))
+                if (!string.IsNullOrEmpty(salidaDet)) { wd = new StreamWriter(salidaDet, false, new UTF8Encoding(true)); wd.WriteLine(CAB); }
+                using (StreamReader r = new StreamReader(ruta, Encoding.UTF8, true, 1 << 20))
+                using (StreamWriter w = new StreamWriter(salidaExc, false, new UTF8Encoding(true)))
                 {
-                    if (f.Count == 1 && f[0].Length == 0) continue;
-                    string dev = Campo(f, iDev), app = Campo(f, iApp);
-                    if (dev.Length == 0 || app.Length == 0) continue;
-                    if (!Interesa(app, filtro)) continue;
+                    cab.Clear();
+                    if (!Cabecera(r, cab, out error)) return error;
+                    w.WriteLine(CAB);
+                    while (LeerFila(r, f))
+                    {
+                        if (f.Count == 1 && f[0].Length == 0) continue;
+                        string dev = Campo(f, iDev), app = Campo(f, iApp);
+                        if (dev.Length == 0 || app.Length == 0) continue;
+                        if (!Interesa(app, filtro)) continue;
 
-                    string ven = Campo(f, iVen), ver = Campo(f, iVer);
-                    if (!EsExcepcion(ven, app, ver, estandar, maxVer)) continue;
+                        string ven = Campo(f, iVen), ver = Campo(f, iVer);
+                        string tope, clave = ven + "\\u0001" + app;
+                        if (estandar == null || estandar.Count == 0 || !estandar.TryGetValue(clave, out tope))
+                            maxVer.TryGetValue(clave, out tope);
 
-                    string tope, clave = ven + "\\u0001" + app;
-                    if (estandar == null || estandar.Count == 0 || !estandar.TryGetValue(clave, out tope))
-                        maxVer.TryGetValue(clave, out tope);
+                        // -Completo: todo, al dia o no, y no pasa por las otras salidas
+                        if (wd != null && EsCompleto(app, completos))
+                        {
+                            wd.WriteLine(Csv(dev) + "," + Csv(Campo(f, iUsr)) + "," + Csv(ven) + "," + Csv(app) + "," +
+                                         Csv(ver) + "," + Csv(tope) + "," + Csv(Campo(f, iOsV)));
+                            det++;
+                            continue;
+                        }
+                        if (!EsExcepcion(ven, app, ver, estandar, maxVer)) continue;
 
-                    w.WriteLine(Csv(dev) + "," + Csv(Campo(f, iUsr)) + "," + Csv(ven) + "," + Csv(app) + "," +
-                                Csv(ver) + "," + Csv(tope) + "," + Csv(Campo(f, iOsV)));
-                    excep++;
+                        w.WriteLine(Csv(dev) + "," + Csv(Campo(f, iUsr)) + "," + Csv(ven) + "," + Csv(app) + "," +
+                                    Csv(ver) + "," + Csv(tope) + "," + Csv(Campo(f, iOsV)));
+                        excep++;
+                    }
                 }
             }
+            finally { if (wd != null) wd.Dispose(); }
         }
 
-        return string.Format(CultureInfo.InvariantCulture, "OK|{0}|{1}|{2}|{3}",
-                             filas, escritas, devs.Count, excep);
+        return string.Format(CultureInfo.InvariantCulture, "OK|{0}|{1}|{2}|{3}|{4}",
+                             filas, escritas, devs.Count, excep, det);
     }
 }
 '@
@@ -988,10 +1022,12 @@ $carpeta = Split-Path $Ruta -Parent
 $salidaCat = Join-Path $carpeta 'resumen_catalogo.csv'
 $salidaPar = Join-Path $carpeta 'resumen_parque.csv'
 $salidaExc = if ($SinExcepciones) { $null } else { Join-Path $carpeta 'resumen_excepciones.csv' }
+$salidaDet = if ($Completo -and -not $SinExcepciones) { Join-Path $carpeta 'resumen_detalle.csv' } else { $null }
+if ($Completo) { Write-Host ("Detalle completo de: {0}" -f ($Completo -join ', ')) -ForegroundColor Cyan }
 
 Write-Host 'Recorriendo el archivo. No se carga en memoria; con varios GB tarda unos minutos...' -ForegroundColor Cyan
 $reloj = [Diagnostics.Stopwatch]::StartNew()
-$res = [Resumidor]::Procesar($Ruta, $salidaCat, $salidaPar, $salidaExc, $Apps, $E, $TopApps)
+$res = [Resumidor]::Procesar($Ruta, $salidaCat, $salidaPar, $salidaExc, $Apps, $E, $TopApps, $Completo, $salidaDet)
 $reloj.Stop()
 
 if (-not $res.StartsWith('OK|')) { throw $res }
@@ -1005,6 +1041,9 @@ Write-Host ("  {0,12:n0} al dia              -> {1}" -f [int]$partes[2], (Split-
 Write-Host ("  {0,12:n0} equipos             -> {1}" -f [int]$partes[3], (Split-Path $salidaPar -Leaf)) -ForegroundColor Green
 if ($salidaExc) {
     Write-Host ("  {0,12:n0} desactualizados     -> {1}" -f $nExc, (Split-Path $salidaExc -Leaf)) -ForegroundColor Green
+    if ($salidaDet) {
+        Write-Host ("  {0,12:n0} detalle completo    -> {1}" -f [long]$partes[5], (Split-Path $salidaDet -Leaf)) -ForegroundColor Green
+    }
     $mb = (Get-Item $salidaExc).Length / 1MB
     Write-Host ("  {0,12:n1} MB de excepciones" -f $mb) -ForegroundColor DarkGray
     if ($mb -gt 400) {
