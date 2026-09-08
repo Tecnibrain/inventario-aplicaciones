@@ -3856,13 +3856,15 @@ function Exportar {
    un enlace temporal a un ZIP. No hay tope de 100.000 filas, asi que el
    inventario completo sale de una sola vez.
    ------------------------------------------------------------------------ */
+// Sin lista de columnas a proposito. Pedirlas por nombre no ahorra nada que
+// importe y si puede romperlo: si Intune descarta en silencio las que no
+// reconoce en vez de fallar, el CSV sale sin la columna de equipo o la de
+// aplicacion y el tablero ya no sabe que es. El detector aguanta de sobra las
+// columnas de mas, que es justo lo que se comprobo con las cabeceras reales.
 const INFORMES_INTUNE = {
   parque: ['Parque de equipos', 'DevicesWithInventory', []],
-  catalogo: ['Catalogo agregado', 'AppInvAggregate',
-    ['ApplicationName', 'ApplicationPublisher', 'ApplicationVersion', 'Platform', 'DeviceCount']],
-  detalle: ['Detalle crudo por equipo', 'AppInvRawData',
-    ['DeviceName', 'UserName', 'ApplicationName', 'ApplicationPublisher', 'ApplicationVersion',
-     'Platform', 'OSDescription', 'OSVersion']]
+  catalogo: ['Catalogo agregado', 'AppInvAggregate', []],
+  detalle: ['Detalle crudo por equipo', 'AppInvRawData', []]
 };
 
 function scriptIntune(opts, modo) {
