@@ -167,6 +167,29 @@ el CSV listo. Tres informes, que son las tres formas que el modelo sabe fusionar
 
 Permiso necesario: **`DeviceManagementManagedDevices.Read.All`**, uno solo, para los tres.
 
+### El detalle crudo no cabe, y no es cuestión de optimizar
+
+`AppInvRawData` de un parque de 27.000 equipos son **gigabytes**. El navegador no puede con eso:
+`arrayBuffer()` reserva el archivo entero y decodificarlo a texto lo **duplica**, porque las cadenas
+de JavaScript son UTF-16. Por encima de **400 MB** la aplicación ni lo intenta, porque intentarlo
+tumba la pestaña y se lleva por delante lo que ya estuviera cargado.
+
+Para eso está **`resumir-detalle.ps1`**: recorre el archivo en el equipo, sin cargarlo en memoria,
+y saca de él lo que el tablero sí usa.
+
+| Sale | Forma | Contenido |
+| ---- | ----- | --------- |
+| `resumen_catalogo.csv` | agregado | aplicación, versión y número de equipos |
+| `resumen_parque.csv`   | parque   | un registro por equipo |
+
+De gigabytes salen unos pocos MB **sin perder ningún equipo ni ninguna versión**. Lo que sí se
+pierde es saber *qué* equipo tiene *qué* aplicación; si hace falta ese cruce, trae el detalle
+acotado con un filtro en vez de entero.
+
+Va en C# compilado al vuelo: en PowerShell puro, un bucle de varios millones de vueltas tarda más
+que todo lo demás junto. Lee el CSV respetando comillas, comas dentro de los campos y saltos de
+línea dentro de un campo entrecomillado — los tres casos aparecen en nombres reales de aplicación.
+
 ### Lo que Intune no trae
 
 - `EndOfSupportStatus`: el software fuera de soporte.

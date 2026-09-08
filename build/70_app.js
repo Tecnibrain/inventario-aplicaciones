@@ -507,6 +507,9 @@ async function gxAction(a) {
     } catch (e) { toast(e.message); }
     return;
   }
+  if (a === 'resumir') {
+    return saveFile('resumir-detalle.ps1', scriptResumir(), 'text/plain;charset=utf-8');
+  }
   if (a === 'intune') {
     const opts = { parque: !!($('#inParque') || {}).checked,
                    catalogo: !!($('#inCatalogo') || {}).checked,
@@ -618,15 +621,39 @@ $('#btnNew').addEventListener('click', () => {
    ========================================================================== */
 const dropCard = $('#dropCard'), dropErr = $('#dropErr');
 function fail(msg) {
-  dropErr.innerHTML = '<b>No se pudo leer el archivo.</b><br>' + esc(msg);
+  // Los parrafos del mensaje se ven; esc() por si solo los dejaria en una linea.
+  dropErr.innerHTML = '<b>No se pudo leer el archivo.</b><br>' +
+    esc(msg).split(String.fromCharCode(10)).join('<br>');
   dropErr.classList.add('on');
+  // Si ya hay algo cargado, un archivo que falla no puede llevarselo por delante:
+  // se avisa y se deja el tablero donde estaba.
+  if (M.sources.length) { toast(msg.split(String.fromCharCode(10))[0]); return; }
   $('#dropScreen').hidden = false; $('#app').hidden = true; $('#topActions').hidden = true;
 }
 /** `añadir` funde el archivo con lo ya cargado; si no, empieza de cero. */
+// Medido en Chrome: 295 MB de CSV entran (18 s), dos millones de filas tumban
+// la pestaña. El coste real no es el archivo, es lo que se hace con el:
+// arrayBuffer() lo reserva entero y decodificarlo a texto lo duplica, porque las
+// cadenas de JavaScript son UTF-16. Por encima del tope no se intenta siquiera,
+// porque intentarlo se lleva por delante lo que ya estuviera cargado.
+const TOPE_MB = 400;
+const AVISO_MB = 150;
+
 async function loadFile(file, añadir) {
   if (!file) return;
   dropErr.classList.remove('on'); dropCard.classList.remove('hot');
   const name = file.name || 'archivo';
+  const mb = (file.size || 0) / 1048576;
+  if (mb > TOPE_MB) {
+    fail(`«${truncate(name, 30)}» pesa ${mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'}, ` +
+         `y el límite del navegador está en ${TOPE_MB} MB. No se intenta abrir: intentarlo tumba la pestaña ` +
+         `y se lleva por delante lo que ya tuvieras cargado.\n\n` +
+         `El detalle crudo de un parque grande no cabe aquí, y tampoco hace falta: resúmelo antes con ` +
+         `resumir-detalle.ps1 (Origen de datos → Intune), que lo recorre en tu equipo sin cargarlo en ` +
+         `memoria y deja un catálogo y un parque de unos pocos MB. O tráelo acotado con un filtro.`);
+    return;
+  }
+  if (mb > AVISO_MB) toast(`${Math.round(mb)} MB: esto va a tardar. No cierres la pestaña.`);
   try {
     const buf = await file.arrayBuffer();
     let grid, sheet = '';

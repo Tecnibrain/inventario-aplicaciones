@@ -561,6 +561,216 @@ function Exportar {
 `;
 }
 
+/* ---- 24.5c resumir un detalle enorme sin abrirlo -------------------------
+   El detalle crudo de un parque grande no cabe en el navegador, pero lo que el
+   tablero necesita de el si: el catalogo agregado y el parque. Los dos salen de
+   una sola pasada por el archivo, sin cargarlo en memoria.
+
+   El C# va dentro de esta plantilla, asi que sus barras invertidas van dobladas.
+   ------------------------------------------------------------------------ */
+function scriptResumir() {
+  return `<#
+    Inventario de Aplicaciones - resumir un detalle crudo demasiado grande
+    Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
+
+    Para que sirve:
+      El detalle por equipo de un parque grande son gigabytes, y el navegador no
+      lo aguanta: reservar el archivo y decodificarlo a texto lo duplica, porque
+      las cadenas de JavaScript son UTF-16.
+
+      Pero abrirlo entero no hace falta. Lo que el tablero usa de ese archivo es
+      el catalogo (aplicacion + version + cuantos equipos) y el parque (un
+      registro por equipo). Las dos cosas salen recorriendolo una vez, sin
+      guardarlo en memoria: de gigabytes salen unos pocos MB, y no se pierde
+      ningun equipo ni ninguna version.
+
+      Lo que si se pierde es saber QUE equipo tiene QUE aplicacion. Si necesitas
+      ese cruce, trae el detalle acotado con un filtro en vez de entero.
+
+    Uso:
+      .\\resumir-detalle.ps1 -Ruta 'C:\\ruta\\salida\\detalle.csv'
+      (o ejecutalo sin nada y te pregunta la ruta)
+
+    Deja al lado del original:
+      resumen_catalogo.csv   aplicacion, version y numero de equipos
+      resumen_parque.csv     un registro por equipo
+    Arrastra los dos al tablero, a la vez.
+#>
+
+param([string]$Ruta)
+
+$ErrorActionPreference = 'Stop'
+if (-not $Ruta) { $Ruta = Read-Host 'Ruta del CSV grande' }
+$Ruta = $Ruta.Trim().Trim('"')
+if (-not (Test-Path $Ruta)) { throw "No existe el archivo: $Ruta" }
+$Ruta = (Resolve-Path $Ruta).Path
+
+$info = Get-Item $Ruta
+Write-Host ("Archivo: {0}  ({1:n1} MB)" -f $info.Name, ($info.Length / 1MB)) -ForegroundColor Cyan
+
+# En PowerShell puro, un bucle de varios millones de vueltas tarda mas que todo
+# lo demas junto. Compilado, el limite pasa a ser el disco.
+$fuente = @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text;
+
+public class Resumidor
+{
+    // Un CSV no se parte por comas y ya: un nombre como
+    // "Microsoft Visual C++ 2015-2022 Redistributable (x64), 14.38" lleva la
+    // suya dentro, entre comillas. Esto lee campo a campo respetandolas, y
+    // aguanta saltos de linea dentro de un campo entrecomillado.
+    static bool LeerFila(TextReader r, List<string> campos)
+    {
+        campos.Clear();
+        StringBuilder campo = new StringBuilder();
+        bool comillas = false, algo = false;
+        int c;
+        while ((c = r.Read()) != -1)
+        {
+            algo = true;
+            char ch = (char)c;
+            if (comillas)
+            {
+                if (ch == '"')
+                {
+                    if (r.Peek() == '"') { r.Read(); campo.Append('"'); }
+                    else comillas = false;
+                }
+                else campo.Append(ch);
+            }
+            else if (ch == '"') comillas = true;
+            else if (ch == ',') { campos.Add(campo.ToString()); campo.Length = 0; }
+            else if (ch == '\\n') { campos.Add(campo.ToString()); return true; }
+            else if (ch != '\\r') campo.Append(ch);
+        }
+        if (!algo) return false;
+        campos.Add(campo.ToString());
+        return true;
+    }
+
+    static int Indice(List<string> cab, string[] candidatos)
+    {
+        for (int k = 0; k < candidatos.Length; k++)
+            for (int i = 0; i < cab.Count; i++)
+                if (string.Equals(cab[i].Trim(), candidatos[k], StringComparison.OrdinalIgnoreCase))
+                    return i;
+        return -1;
+    }
+
+    static string Campo(List<string> f, int i)
+    {
+        if (i < 0 || i >= f.Count) return "";
+        return f[i].Trim();
+    }
+
+    static string Csv(string s)
+    {
+        if (s == null) s = "";
+        if (s.IndexOf('"') >= 0) s = s.Replace("\\"", "\\"\\"");
+        return "\\"" + s + "\\"";
+    }
+
+    public static string Procesar(string ruta, string salidaCat, string salidaPar)
+    {
+        // aplicacion+version -> cuantas filas. En AppInvRawData cada equipo
+        // aparece una vez por aplicacion, asi que contar filas cuenta equipos.
+        Dictionary<string, int> apps = new Dictionary<string, int>(StringComparer.Ordinal);
+        // equipo -> su ficha, la primera que se vea
+        Dictionary<string, string[]> devs = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+
+        long filas = 0;
+        List<string> cab = new List<string>();
+        List<string> f = new List<string>();
+        int iDev, iApp, iVen, iVer, iUsr, iOs, iOsV;
+
+        using (StreamReader r = new StreamReader(ruta, Encoding.UTF8, true, 1 << 20))
+        {
+            if (!LeerFila(r, cab)) return "El archivo esta vacio.";
+            if (cab.Count > 0 && cab[0].Length > 0 && cab[0][0] == '\\uFEFF') cab[0] = cab[0].Substring(1);
+
+            iDev = Indice(cab, new string[] { "DeviceName", "Device", "Equipo", "NombreEquipo", "ManagedDeviceName" });
+            iApp = Indice(cab, new string[] { "ApplicationName", "SoftwareName", "DisplayName", "Aplicacion" });
+            iVen = Indice(cab, new string[] { "ApplicationPublisher", "SoftwareVendor", "Publisher", "Fabricante" });
+            iVer = Indice(cab, new string[] { "ApplicationVersion", "SoftwareVersion", "Version" });
+            iUsr = Indice(cab, new string[] { "UserName", "UPN", "EmailAddress", "Usuario" });
+            iOs  = Indice(cab, new string[] { "OSDescription", "Platform", "OS", "OSDistribution" });
+            iOsV = Indice(cab, new string[] { "OSVersion", "OSVersionInfo" });
+
+            if (iApp < 0 && iDev < 0)
+                return "No encuentro ni columna de aplicacion ni de equipo. Cabecera: " + string.Join(", ", cab.ToArray());
+
+            while (LeerFila(r, f))
+            {
+                if (f.Count == 1 && f[0].Length == 0) continue;
+                filas++;
+
+                string dev = Campo(f, iDev);
+                if (dev.Length > 0 && !devs.ContainsKey(dev))
+                    devs[dev] = new string[] { dev, Campo(f, iUsr), Campo(f, iOs), Campo(f, iOsV) };
+
+                string app = Campo(f, iApp);
+                if (app.Length == 0) continue;
+                string clave = Campo(f, iVen) + "\\u0001" + app + "\\u0001" + Campo(f, iVer);
+                int n;
+                apps.TryGetValue(clave, out n);
+                apps[clave] = n + 1;
+            }
+        }
+
+        using (StreamWriter w = new StreamWriter(salidaCat, false, new UTF8Encoding(true)))
+        {
+            w.WriteLine("SoftwareVendor,SoftwareName,SoftwareVersion,Equipos");
+            foreach (KeyValuePair<string, int> kv in apps)
+            {
+                string[] partes = kv.Key.Split('\\u0001');
+                w.WriteLine(Csv(partes[0]) + "," + Csv(partes[1]) + "," + Csv(partes[2]) + "," +
+                            kv.Value.ToString(CultureInfo.InvariantCulture));
+            }
+        }
+
+        using (StreamWriter w = new StreamWriter(salidaPar, false, new UTF8Encoding(true)))
+        {
+            w.WriteLine("DeviceName,UserName,OSDistribution,OSVersionInfo");
+            foreach (KeyValuePair<string, string[]> kv in devs)
+            {
+                string[] v = kv.Value;
+                w.WriteLine(Csv(v[0]) + "," + Csv(v[1]) + "," + Csv(v[2]) + "," + Csv(v[3]));
+            }
+        }
+
+        return string.Format(CultureInfo.InvariantCulture, "OK|{0}|{1}|{2}", filas, apps.Count, devs.Count);
+    }
+}
+'@
+
+Add-Type -TypeDefinition $fuente -Language CSharp
+
+$carpeta = Split-Path $Ruta -Parent
+$salidaCat = Join-Path $carpeta 'resumen_catalogo.csv'
+$salidaPar = Join-Path $carpeta 'resumen_parque.csv'
+
+Write-Host 'Recorriendo el archivo. No se carga en memoria; con varios GB tarda unos minutos...' -ForegroundColor Cyan
+$reloj = [Diagnostics.Stopwatch]::StartNew()
+$res = [Resumidor]::Procesar($Ruta, $salidaCat, $salidaPar)
+$reloj.Stop()
+
+if (-not $res.StartsWith('OK|')) { throw $res }
+$partes = $res.Split('|')
+
+Write-Host ''
+Write-Host ("Listo en {0:n0} s" -f $reloj.Elapsed.TotalSeconds) -ForegroundColor Green
+Write-Host ("  {0,12:n0} filas leidas" -f [long]$partes[1])
+Write-Host ("  {0,12:n0} aplicacion+version  -> {1}" -f [int]$partes[2], (Split-Path $salidaCat -Leaf)) -ForegroundColor Green
+Write-Host ("  {0,12:n0} equipos             -> {1}" -f [int]$partes[3], (Split-Path $salidaPar -Leaf)) -ForegroundColor Green
+Write-Host ''
+Write-Host 'Arrastra los DOS archivos al tablero, a la vez.' -ForegroundColor Cyan
+`;
+}
+
 /* ---- 24.5b extraccion desde Intune --------------------------------------
    Intune no expone KQL, pero si algo que Advanced Hunting no tiene: trabajos de
    exportacion. Se pide un informe, Intune lo genera en segundo plano y devuelve
@@ -1076,6 +1286,21 @@ function vDatos(A, rows) {
             <span class="hint">Es <b>OData, no KQL</b>: nada que ver con el filtro de Advanced Hunting de
               arriba. Cada informe admite unos campos distintos, así que si falla, déjalo vacío.</span></div>
           <button class="btn btn-p" data-gx="intune">Descargar extraer-intune.ps1</button>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><div><h3>Si el detalle no cabe</h3>
+        <p>Y con un parque grande no cabe: son gigabytes</p></div></div>
+        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
+          <p style="margin:0 0 10px">El navegador no puede con el detalle crudo entero. No es cuestión de
+            optimizar: reservar el archivo y decodificarlo a texto lo <b>duplica</b>, porque las cadenas de
+            JavaScript son UTF-16. Por encima de <b>400&nbsp;MB</b> el tablero ni lo intenta.</p>
+          <p style="margin:0 0 12px">Pero abrirlo entero no hace falta. <code>resumir-detalle.ps1</code> lo
+            recorre <b>en tu equipo</b>, sin cargarlo en memoria, y saca de él lo que el tablero sí usa:
+            el catálogo y el parque. De gigabytes salen unos pocos MB, <b>sin perder ningún equipo ni
+            ninguna versión</b>.</p>
+          <p style="margin:0 0 12px">Lo que sí se pierde es saber qué equipo tiene qué aplicación. Si
+            necesitas ese cruce, trae el detalle <b>acotado con el filtro</b> en vez de entero.</p>
+          <button class="btn" data-gx="resumir">Descargar resumir-detalle.ps1</button>
         </div>
       </div>
       <div class="card"><div class="card-h"><div><h3>Qué permiso necesita</h3>
