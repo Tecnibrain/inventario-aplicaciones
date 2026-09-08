@@ -1051,17 +1051,52 @@ function shapeOf(cols) {
   return null;
 }
 
+/** La cabecera llego entera en una columna: el separador no era el adivinado. */
+function sinPartir(headers) {
+  const vistas = headers.filter(h => h !== '');
+  return vistas.length === 1 && /[,;\t|]/.test(vistas[0]);
+}
+
+/**
+ * Por que no se reconocio el archivo. Sin ver las cabeceras que llegaron no hay
+ * forma de saberlo, asi que el mensaje las enseña y separa los tres motivos que
+ * lo causan de verdad: separador mal adivinado, cabeceras en otra fila, o
+ * nombres de columna que el detector no conoce todavia.
+ */
+function explicaCabeceras(headers, grid) {
+  const vistas = headers.filter(h => h !== '');
+  const lista = vistas.slice(0, 14).map(h => '«' + truncate(h, 34) + '»').join(' · ') +
+                (vistas.length > 14 ? ' … y ' + (vistas.length - 14) + ' más' : '');
+
+  if (sinPartir(headers))
+    return 'La cabecera no se partió en columnas: llegó entera como una sola. ' +
+           'El archivo usa un separador que no se reconoció. Ábrelo y comprueba si separa ' +
+           'con punto y coma, tabulador o barra vertical. Lo que llegó: ' + lista;
+
+  if (!vistas.length)
+    return 'La primera fila del archivo está vacía, así que no hay cabeceras que leer. ' +
+           'Algunos exports meten filas de título antes de la tabla: bórralas y deja la ' +
+           'fila de nombres de columna arriba del todo.';
+
+  return 'No se reconoció ninguna columna útil. Hace falta al menos una de aplicación ' +
+         '(SoftwareName, ApplicationName, Aplicación…) o de equipo (DeviceName, Equipo…). ' +
+         'Cabeceras leídas' + (grid && grid.length > 1 ? ' (' + fmt(grid.length - 1) + ' filas debajo)' : '') +
+         ': ' + lista;
+}
+
 /**
  * Lee una cuadricula y la funde en el modelo. `reset` empieza de cero;
  * si no, acumula: asi se cargan parque + catalogo + excepciones por separado.
  */
 function addSource(grid, fileName, sheet, reset) {
   const headers = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
+  // Antes de detectar nada: si la cabecera llego entera en una sola columna, lo
+  // que haya dentro puede encajar por casualidad («DeviceId;ApplicationName…»
+  // contiene «device») y el archivo entraria como un parque de un solo equipo.
+  if (sinPartir(headers)) throw new Error(explicaCabeceras(headers, grid));
   const cols = detectColumns(headers);
   const shape = shapeOf(cols);
-  if (!shape) throw new Error(
-    'No se reconoció ninguna columna útil. Se necesita al menos una columna de ' +
-    'aplicación o de equipo. Comprueba que la primera fila sean las cabeceras.');
+  if (!shape) throw new Error(explicaCabeceras(headers, grid));
 
   if (reset) M.sources = [];
 
@@ -3959,18 +3994,32 @@ function Exportar-Informe {
 
     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
     Expand-Archive -Path $zip -DestinationPath $tmp -Force
-    $csv = Get-ChildItem $tmp -Filter *.csv -Recurse | Select-Object -First 1
-    if (-not $csv) { Write-Host '   ERROR: el ZIP no traia ningun CSV' -ForegroundColor Red; return }
 
-    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
-    Move-Item $csv.FullName $ruta -Force
+    # Un informe grande puede venir partido en varios CSV. Quedarse con el
+    # primero perderia el resto sin decir nada, asi que se guardan todos.
+    $partes = @(Get-ChildItem $tmp -Filter *.csv -Recurse | Sort-Object Name)
+    if (-not $partes.Count) { Write-Host '   ERROR: el ZIP no traia ningun CSV' -ForegroundColor Red; return }
+
+    $i = 0
+    foreach ($parte in $partes) {
+        $sufijo = if ($partes.Count -eq 1) { '' } else { "_$i" }
+        $ruta = Join-Path $Salida ("{0}{1}.csv" -f $Nombre, $sufijo)
+        Move-Item $parte.FullName $ruta -Force
+
+        # cuenta en streaming: un detalle completo no cabe en memoria de golpe
+        $n = 0
+        foreach ($linea in [IO.File]::ReadLines($ruta)) { $n++ }
+        Write-Host ("   {0:n0} lineas -> {1}" -f [Math]::Max(0, $n - 1), (Split-Path $ruta -Leaf)) -ForegroundColor Green
+
+        # La cabecera, a la vista: si el tablero luego no reconoce el archivo,
+        # es lo primero que hay que mirar y ya esta aqui.
+        $cab = ''
+        foreach ($linea in [IO.File]::ReadLines($ruta)) { $cab = $linea; break }
+        Write-Host ("   Cabecera: {0}" -f $cab) -ForegroundColor DarkGray
+        $i++
+    }
     Remove-Item $tmp -Recurse -Force
     Remove-Item $zip -Force
-
-    # cuenta en streaming: un detalle completo no cabe en memoria de golpe
-    $n = 0
-    foreach ($linea in [IO.File]::ReadLines($ruta)) { $n++ }
-    Write-Host ("   {0:n0} lineas -> {1}" -f [Math]::Max(0, $n - 1), (Split-Path $ruta -Leaf)) -ForegroundColor Green
 }
 ${cuerpo}
 Write-Host ''

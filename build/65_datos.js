@@ -705,18 +705,32 @@ function Exportar-Informe {
 
     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
     Expand-Archive -Path $zip -DestinationPath $tmp -Force
-    $csv = Get-ChildItem $tmp -Filter *.csv -Recurse | Select-Object -First 1
-    if (-not $csv) { Write-Host '   ERROR: el ZIP no traia ningun CSV' -ForegroundColor Red; return }
 
-    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
-    Move-Item $csv.FullName $ruta -Force
+    # Un informe grande puede venir partido en varios CSV. Quedarse con el
+    # primero perderia el resto sin decir nada, asi que se guardan todos.
+    $partes = @(Get-ChildItem $tmp -Filter *.csv -Recurse | Sort-Object Name)
+    if (-not $partes.Count) { Write-Host '   ERROR: el ZIP no traia ningun CSV' -ForegroundColor Red; return }
+
+    $i = 0
+    foreach ($parte in $partes) {
+        $sufijo = if ($partes.Count -eq 1) { '' } else { "_$i" }
+        $ruta = Join-Path $Salida ("{0}{1}.csv" -f $Nombre, $sufijo)
+        Move-Item $parte.FullName $ruta -Force
+
+        # cuenta en streaming: un detalle completo no cabe en memoria de golpe
+        $n = 0
+        foreach ($linea in [IO.File]::ReadLines($ruta)) { $n++ }
+        Write-Host ("   {0:n0} lineas -> {1}" -f [Math]::Max(0, $n - 1), (Split-Path $ruta -Leaf)) -ForegroundColor Green
+
+        # La cabecera, a la vista: si el tablero luego no reconoce el archivo,
+        # es lo primero que hay que mirar y ya esta aqui.
+        $cab = ''
+        foreach ($linea in [IO.File]::ReadLines($ruta)) { $cab = $linea; break }
+        Write-Host ("   Cabecera: {0}" -f $cab) -ForegroundColor DarkGray
+        $i++
+    }
     Remove-Item $tmp -Recurse -Force
     Remove-Item $zip -Force
-
-    # cuenta en streaming: un detalle completo no cabe en memoria de golpe
-    $n = 0
-    foreach ($linea in [IO.File]::ReadLines($ruta)) { $n++ }
-    Write-Host ("   {0:n0} lineas -> {1}" -f [Math]::Max(0, $n - 1), (Split-Path $ruta -Leaf)) -ForegroundColor Green
 }
 ${cuerpo}
 Write-Host ''

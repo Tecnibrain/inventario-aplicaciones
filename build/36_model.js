@@ -48,17 +48,52 @@ function shapeOf(cols) {
   return null;
 }
 
+/** La cabecera llego entera en una columna: el separador no era el adivinado. */
+function sinPartir(headers) {
+  const vistas = headers.filter(h => h !== '');
+  return vistas.length === 1 && /[,;\t|]/.test(vistas[0]);
+}
+
+/**
+ * Por que no se reconocio el archivo. Sin ver las cabeceras que llegaron no hay
+ * forma de saberlo, asi que el mensaje las enseña y separa los tres motivos que
+ * lo causan de verdad: separador mal adivinado, cabeceras en otra fila, o
+ * nombres de columna que el detector no conoce todavia.
+ */
+function explicaCabeceras(headers, grid) {
+  const vistas = headers.filter(h => h !== '');
+  const lista = vistas.slice(0, 14).map(h => '«' + truncate(h, 34) + '»').join(' · ') +
+                (vistas.length > 14 ? ' … y ' + (vistas.length - 14) + ' más' : '');
+
+  if (sinPartir(headers))
+    return 'La cabecera no se partió en columnas: llegó entera como una sola. ' +
+           'El archivo usa un separador que no se reconoció. Ábrelo y comprueba si separa ' +
+           'con punto y coma, tabulador o barra vertical. Lo que llegó: ' + lista;
+
+  if (!vistas.length)
+    return 'La primera fila del archivo está vacía, así que no hay cabeceras que leer. ' +
+           'Algunos exports meten filas de título antes de la tabla: bórralas y deja la ' +
+           'fila de nombres de columna arriba del todo.';
+
+  return 'No se reconoció ninguna columna útil. Hace falta al menos una de aplicación ' +
+         '(SoftwareName, ApplicationName, Aplicación…) o de equipo (DeviceName, Equipo…). ' +
+         'Cabeceras leídas' + (grid && grid.length > 1 ? ' (' + fmt(grid.length - 1) + ' filas debajo)' : '') +
+         ': ' + lista;
+}
+
 /**
  * Lee una cuadricula y la funde en el modelo. `reset` empieza de cero;
  * si no, acumula: asi se cargan parque + catalogo + excepciones por separado.
  */
 function addSource(grid, fileName, sheet, reset) {
   const headers = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
+  // Antes de detectar nada: si la cabecera llego entera en una sola columna, lo
+  // que haya dentro puede encajar por casualidad («DeviceId;ApplicationName…»
+  // contiene «device») y el archivo entraria como un parque de un solo equipo.
+  if (sinPartir(headers)) throw new Error(explicaCabeceras(headers, grid));
   const cols = detectColumns(headers);
   const shape = shapeOf(cols);
-  if (!shape) throw new Error(
-    'No se reconoció ninguna columna útil. Se necesita al menos una columna de ' +
-    'aplicación o de equipo. Comprueba que la primera fila sean las cabeceras.');
+  if (!shape) throw new Error(explicaCabeceras(headers, grid));
 
   if (reset) M.sources = [];
 
