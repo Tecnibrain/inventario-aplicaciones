@@ -902,6 +902,54 @@ function vDatos(A, rows) {
       </div>
     </div>` +
     '<div id="anclaConexion"></div>' +
+    sec('Identificadores de la aplicación', 'Los mismos para los dos scripts y para la conexión en página. Ninguno es secreto') +
+    `<div class="adm-grid">
+      <div class="card"><div class="card-h"><div><h3>De dónde salen</h3>
+        <p>Entra ID → App registrations → tu app → Overview</p></div></div>
+        <div style="margin-top:14px">
+          <div class="fld"><label for="gxClient">Application (client) ID</label>
+            <input id="gxClient" data-cfg="graph.clientId" value="${esc(g.clientId || '')}"
+                   placeholder="00000000-0000-0000-0000-000000000000" spellcheck="false"></div>
+          <div class="fld"><label for="gxTenant">Directory (tenant) ID</label>
+            <input id="gxTenant" data-cfg="graph.tenantId" value="${esc(g.tenantId || '')}"
+                   placeholder="00000000-0000-0000-0000-000000000000" spellcheck="false"></div>
+          <p class="mini" style="margin:2px 0 0">${listo
+            ? '<span class="sem sem-pill ok">Listos</span> Los scripts que descargues los llevarán dentro.'
+            : '<span class="sem sem-pill bad">Faltan</span> Sin ellos el script se descarga igual, pero falla al arrancar.'}</p>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><div><h3>El secreto: cuidado con cuál copias</h3>
+        <p>Es el error más común, y no avisa</p></div></div>
+        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
+          <p style="margin:0 0 10px">En <b>Certificados y secretos</b> hay dos columnas y solo una sirve:</p>
+          <table class="mt" style="margin-bottom:10px"><tbody>
+            <tr><td style="white-space:nowrap"><b>Value</b></td><td>la que necesitas. Algo como
+              <code>abC8Q~x...</code>, y <b>solo se ve al crearlo</b></td></tr>
+            <tr><td style="white-space:nowrap"><b>Secret ID</b></td><td>no sirve. Es un GUID con guiones,
+              y ese se ve siempre</td></tr>
+          </tbody></table>
+          <p style="margin:0 0 10px">Si lo que guardaste tiene forma de <code>0000-0000-…</code>,
+            copiaste el que no era: hay que crear un secreto nuevo, porque el valor original ya no
+            se puede recuperar.</p>
+          <p style="margin:0"><b>El secreto no se escribe aquí ni viaja dentro del script.</b> Se teclea
+            al ejecutarlo, o se lee de la variable <code>GRAPH_SECRET</code>, y se borra de memoria en
+            cuanto se canjea el token.</p>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><div><h3>Qué NO hace falta</h3>
+        <p>Para los dos scripts de esta página</p></div></div>
+        <ul style="margin:14px 0 0;padding-left:18px;font-size:12.5px;color:var(--ink-3);line-height:1.9">
+          <li><b>URI de redirección.</b> Sirve para devolver al usuario tras iniciar sesión en el
+            navegador. En el flujo de aplicación no hay usuario ni navegador: el script pide el token
+            por HTTP y lo recibe en la respuesta. Entra ID ni la mira.</li>
+          <li><b>Asignación de usuario</b> en Enterprise applications. No hay usuario que asignar,
+            así que <code>AADSTS50105</code> no puede darse.</li>
+          <li><b>Permiso delegado.</b> Con el de tipo <i>Aplicación</i> concedido es suficiente.</li>
+          <li><b>Instalar módulos.</b> El script habla con OAuth por su cuenta, así que funciona en
+            Windows PowerShell 5.1.</li>
+        </ul>
+      </div>
+    </div>` +
     sec('Graph Explorer', 'La herramienta web de Microsoft. No requiere registrar nada ni instalar nada') +
     `<div class="adm-grid">
       <div class="card"><div class="card-h"><div><h3>Ejecutar en Graph Explorer</h3>
@@ -1045,12 +1093,9 @@ function vDatos(A, rows) {
       <div class="card"><div class="card-h"><div><h3>Registro de la aplicación</h3>
         <p>Un formulario de cinco minutos en Entra ID. Ninguno de estos valores es secreto</p></div></div>
         <div style="margin-top:14px">
-          <div class="fld"><label for="gxClient">Application (client) ID</label>
-            <input id="gxClient" data-cfg="graph.clientId" value="${esc(g.clientId || '')}"
-                   placeholder="00000000-0000-0000-0000-000000000000" spellcheck="false"></div>
-          <div class="fld"><label for="gxTenant">Directory (tenant) ID</label>
-            <input id="gxTenant" data-cfg="graph.tenantId" value="${esc(g.tenantId || '')}"
-                   placeholder="00000000-0000-0000-0000-000000000000" spellcheck="false"></div>
+          <p class="mini" style="margin:0 0 12px">El <b>Application ID</b> y el <b>Directory ID</b> se
+            rellenan arriba, en <i>Identificadores de la aplicación</i>: son los mismos para los tres
+            caminos. Lo único propio de este es la URI de aquí abajo.</p>
           <div class="fld"><label>URI de redirección que debes registrar</label>
             <input value="${esc(redirectUri())}" readonly onclick="this.select()"
                    style="color:var(--brand)"></div>
