@@ -1,6 +1,7 @@
 # Inventario de Aplicaciones
 
-Plataforma de gestión de software y cumplimiento para administradores de Microsoft Intune.
+Plataforma de gestión de software y cumplimiento. Se alimenta de Microsoft Defender
+(Advanced Hunting) o de Microsoft Intune (informes exportados), o de los dos a la vez.
 Carga un inventario exportado en Excel o CSV y lo convierte en un tablero de control:
 cumplimiento por equipo y por aplicación, control de versiones, informes ejecutivos para
 cliente y tendencias históricas.
@@ -145,6 +146,48 @@ Medido en Chrome: 70.000 filas cargan en 6 s (83 MB); 371.000 en 18 s (295 MB); 
 tumban la pestaña. Un parque de 27.000 equipos son ~1,3 millones de filas de detalle, así que
 la vía practicable es **parque + catálogo agregado**, que cubre el 100 % del parque con unas
 decenas de miles de filas. El detalle se añade solo donde hace falta.
+
+---
+
+## Conexión con Microsoft Intune
+
+Camino alternativo, y en un punto **mejor que Defender**: los informes de Intune se entregan
+como archivo, no como respuesta a una consulta, así que **no se aplica el tope de 100.000
+filas**. El inventario completo sale entero y sin lotes.
+
+El script `extraer-intune.ps1` pide el informe a
+`deviceManagement/reports/exportJobs`, espera a que Intune lo genere, descarga el ZIP y deja
+el CSV listo. Tres informes, que son las tres formas que el modelo sabe fusionar:
+
+| Informe                | Forma      | Qué trae                                               |
+| ---------------------- | ---------- | ------------------------------------------------------ |
+| `DevicesWithInventory` | parque     | un registro por equipo inscrito                         |
+| `AppInvAggregate`      | agregado   | aplicación + versión + número de equipos                |
+| `AppInvRawData`        | detalle    | una fila por equipo y aplicación (millones; usa filtro) |
+
+Permiso necesario: **`DeviceManagementManagedDevices.Read.All`**, uno solo, para los tres.
+
+### Lo que Intune no trae
+
+- `EndOfSupportStatus`: el software fuera de soporte.
+- Vulnerabilidades y CVE.
+- Los equipos con sensor de Defender que **no** estén inscritos en Intune.
+
+Por eso las dos fuentes no se sustituyen, se complementan: **cárgalas juntas** y el tablero las
+funde en un solo modelo.
+
+### Diferencias prácticas frente a Defender
+
+- No hay KQL. El filtro del informe es **OData**, y cada informe admite campos distintos; si uno
+  falla, el script avisa de que el filtro puede ser el culpable.
+- El informe tarda: `AppInvRawData` de un parque de 27.000 equipos puede pasar de diez minutos
+  generándose. El script espera solo.
+- El enlace de descarga viene firmado por Azure y **no lleva cabecera de autorización**: el
+  almacenamiento la rechaza si la ve.
+
+> Probado contra respuestas simuladas y con el parser de PowerShell 5.1. **No se ha ejecutado
+> contra un tenant real**: la detección de columnas sí está verificada con las cabeceras exactas
+> de los tres informes.
 
 ---
 

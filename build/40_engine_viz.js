@@ -22,7 +22,7 @@ function aggregate(rows) {
     n: rows.length,
     devSet: new CSet(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
     appMeta: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
-    appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
+    appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
     dayDev: new Map(), bucketDev: new Map(), devApps: new Map(), devLast: new Map(),
     cpeYes: 0, cpeNo: 0, eosRows: 0, vendorRows: new Map(), userSet: new Set()
   };

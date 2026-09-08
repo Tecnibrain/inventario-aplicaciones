@@ -963,20 +963,20 @@ const GEO = {"fiji":[177.98,-17.83],"fiyi":[177.98,-17.83],"fj":[177.98,-17.83],
    ========================================================================== */
 const ROLES = [
   ['count',  ['equipos','dispositivos','devicecount','devicecounts','numerodispositivos',
-              'numeroequipos','recuento','cantidadequipos','totalequipos','devices',
+              'numeroequipos','recuento','cantidadequipos','totalequipos',
               'instalaciones','installs','conteo','cantidad']],
   ['device', ['devicename','device','equipo','nombreequipo','hostname','host','computer','computername',
               'computador','maquina','machine','pc','nombredispositivo','dispositivo','asset','activo','nombrepc']],
   ['user',   ['username','user','usuario','nombreusuario','samaccountname','upn','owner','propietario','empleado']],
   ['domain', ['domainname','domain','dominio','forest','tenant']],
-  ['vendor', ['softwarevendor','vendor','fabricante','publisher','editor','proveedor','marca','manufacturer','empresa']],
-  ['app',    ['softwarename','software','aplicacion','application','app','producto','product','productname',
+  ['vendor', ['applicationpublisher','softwarevendor','vendor','fabricante','publisher','editor','proveedor','marca','manufacturer','empresa']],
+  ['app',    ['applicationname','softwarename','software','aplicacion','application','app','producto','product','productname',
               'nombreaplicacion','nombresoftware','programa','displayname','nombre']],
-  ['ver',    ['softwareversion','version','versionsoftware','versionaplicacion','displayversion','versionapp','build']],
-  ['cpe',    ['productcodecpe','cpe','productcode','codigoproducto','cpeid','cpename']],
-  ['os',     ['osdistribution','os','sistemaoperativo','operatingsystem','so','plataforma','platform','osname']],
   ['osver',  ['osversioninfo','osversion','versionso','versionsistemaoperativo','osbuild','buildnumber','release','edicion']],
-  ['ts',     ['timestamp','fecha','date','fechareporte','lastseen','ultimavez','ultimoreporte','fechahora',
+  ['ver',    ['applicationversion','softwareversion','version','versionsoftware','versionaplicacion','displayversion','versionapp','build']],
+  ['cpe',    ['productcodecpe','cpe','productcode','codigoproducto','cpeid','cpename']],
+  ['os',     ['osdescription','osdistribution','os','sistemaoperativo','operatingsystem','so','plataforma','platform','osname']],
+  ['ts',     ['lastcontact','timestamp','fecha','date','fechareporte','lastseen','ultimavez','ultimoreporte','fechahora',
               'collecteddate','scandate','fecharegistro','datetime','lastcontact','ultimaconexion']],
   ['geo',    ['country','pais','ciudad','city','region','sede','ubicacion','location','site','oficina','sucursal',
               'departamento','zona','paisregion','geografia','localidad','branch']],
@@ -984,11 +984,6 @@ const ROLES = [
               'razonsocial','compania','grupo']],
   ['area',   ['area','departamento','division','unidad','gerencia','vicepresidencia','equipo_area',
               'businessunit','unidadnegocio','centrocosto','costcenter','ou','departament']],
-  ['eos',    ['endofsupportstatus','endofsupport','eos','findesoporte','estadosoporte',
-              'soportefinalizado','supportstatus']],
-  ['approved',['aprobada','versionaprobada','approvedversion','versionobjetivo','targetversion',
-              'versionesperada']],
-  ['salud',  ['sensorhealthstate','saludsensor','estadosensor','healthstate','sensorhealth']],
   ['eos',    ['endofsupportstatus','endofsupport','eos','findesoporte','estadosoporte',
               'soportefinalizado','supportstatus']],
   ['approved',['aprobada','versionaprobada','approvedversion','versionobjetivo','targetversion',
@@ -1041,13 +1036,17 @@ const TOPES = [1000, 5000, 10000, 30000, 50000, 100000, 200000, 500000];
 
 /** Clasifica el archivo por las columnas que trae. */
 function shapeOf(cols) {
-  const conApp = cols.app != null || cols.vendor != null;
+  // Lo que define una fila de aplicacion es el NOMBRE de la aplicacion. Un
+  // fabricante suelto no basta: en un parque de equipos, «Manufacturer» es
+  // quien fabrico el portatil, no quien publica el software. Darlo por bueno
+  // metia un equipo fantasma por fila en el catalogo.
+  const conApp = cols.app != null;
   const conDev = cols.device != null;
   const conCnt = cols.count != null;
   if (conApp && conCnt && !conDev) return 'agregado';
   if (conApp && conDev) return 'detalle';
   if (conApp && conCnt) return 'agregado';
-  if (conDev && !conApp) return 'parque';
+  if (conDev) return 'parque';
   if (conApp) return 'detalle';
   return null;
 }
@@ -1273,7 +1272,7 @@ function aggregate(rows) {
     n: rows.length,
     devSet: new CSet(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
     appMeta: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
-    appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
+    appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
     dayDev: new Map(), bucketDev: new Map(), devApps: new Map(), devLast: new Map(),
     cpeYes: 0, cpeNo: 0, eosRows: 0, vendorRows: new Map(), userSet: new Set()
   };
@@ -3271,6 +3270,8 @@ const TOK_KEY = 'invapp.tok', PKCE_KEY = 'invapp.pkce';
 
 /* ---- 24.1 generacion de KQL -------------------------------------------- */
 const kqlEsc = s => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+/** Escapa para una cadena de PowerShell entre comillas simples: se duplican. */
+const psEsc = s => String(s).replace(/'/g, "''");
 
 /**
  * Filtro de equipos comun a las tres consultas. Admite varias condiciones, una
@@ -3632,6 +3633,352 @@ async function traerDeDefender(cuales, lotes) {
 }
 
 
+/* ---- 24.5a autenticacion, comun a Defender y a Intune -------------------
+   Los tres caminos terminan igual: con $Token puesto. Lo que cambia despues es
+   contra que endpoint se habla, asi que el bloque se comparte.
+   ------------------------------------------------------------------------ */
+function bloqueAuth(modo, scope) {
+  const g = CFG.graph || {};
+  const authRest = `
+# --- Autenticacion por codigo de dispositivo, SIN MODULO ---------------------
+# Microsoft.Graph.Authentication v2 falla al cargarse en Windows PowerShell 5.1
+# con un TypeLoadException: sus ensamblados apuntan a .NET moderno. Aqui se
+# habla directamente con el endpoint de OAuth, asi que no hace falta el modulo
+# ni PowerShell 7.
+$Client = '${psEsc(g.clientId || '')}'
+$Tenant = '${psEsc(g.tenantId || '')}'
+$Scope  = 'https://graph.microsoft.com/${scope} offline_access'
+if (-not $Client -or -not $Tenant) { throw 'Faltan el Application ID y el Directory ID. Rellenalos en Origen de datos y vuelve a descargar el script.' }
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$base = "https://login.microsoftonline.com/$Tenant/oauth2/v2.0"
+
+Write-Host 'Solicitando codigo de inicio de sesion...' -ForegroundColor Cyan
+$dc = Invoke-RestMethod -Method POST -Uri "$base/devicecode" -Body @{ client_id = $Client; scope = $Scope }
+Write-Host ''
+Write-Host '  ------------------------------------------------------------'
+Write-Host ("  Abre  {0}" -f $dc.verification_uri) -ForegroundColor Yellow
+Write-Host ("  Codigo: {0}" -f $dc.user_code) -ForegroundColor Yellow
+Write-Host '  ------------------------------------------------------------'
+Write-Host ''
+try { Start-Process $dc.verification_uri } catch { }
+
+$tok = $null
+$limite = (Get-Date).AddSeconds([int]$dc.expires_in)
+$espera = [Math]::Max(5, [int]$dc.interval)
+while (-not $tok -and (Get-Date) -lt $limite) {
+    Start-Sleep -Seconds $espera
+    try {
+        $tok = Invoke-RestMethod -Method POST -Uri "$base/token" -Body @{
+            client_id   = $Client
+            grant_type  = 'urn:ietf:params:oauth:grant-type:device_code'
+            device_code = $dc.device_code
+        }
+    } catch {
+        $detalle = ''
+        try { $detalle = ($_.ErrorDetails.Message | ConvertFrom-Json).error } catch { }
+        if ($detalle -eq 'slow_down') { $espera += 5 }
+        elseif ($detalle -ne 'authorization_pending') {
+            $msg = ''
+            try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error_description } catch { $msg = $_.Exception.Message }
+            throw $msg
+        }
+    }
+}
+if (-not $tok) { throw 'Se agoto el tiempo de espera del inicio de sesion.' }
+$Token = $tok.access_token
+Write-Host 'Sesion iniciada correctamente.' -ForegroundColor Green
+
+`;
+  const authApp = `
+# --- Autenticacion de APLICACION (client credentials) ------------------------
+# El permiso ${scope} esta concedido como permiso de APLICACION,
+# no delegado: la app se autentica contra si misma y no hay usuario de por medio.
+# Eso evita tanto la asignacion de usuario como la URI de redireccion.
+#
+# El secreto NO va escrito en este archivo. Se pide al ejecutar, o se lee de la
+# variable de entorno GRAPH_SECRET si prefieres automatizarlo sin teclearlo.
+$Client = '${psEsc(g.clientId || '')}'
+$Tenant = '${psEsc(g.tenantId || '')}'
+if (-not $Client -or -not $Tenant) { throw 'Faltan el Application ID y el Directory ID. Rellenalos en Origen de datos y vuelve a descargar el script.' }
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+if ($env:GRAPH_SECRET) {
+    $plano = $env:GRAPH_SECRET
+    Write-Host 'Usando el secreto de la variable de entorno GRAPH_SECRET.' -ForegroundColor DarkGray
+} else {
+    Write-Host 'Pega el client secret (no se vera al escribir y no se guarda en ningun sitio):' -ForegroundColor Cyan
+    $seguro = Read-Host -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($seguro)
+    try { $plano = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+if (-not $plano) { throw 'No se recibio ningun secreto.' }
+
+Write-Host 'Solicitando token de aplicacion...' -ForegroundColor Cyan
+try {
+    $tok = Invoke-RestMethod -Method POST -Uri "https://login.microsoftonline.com/$Tenant/oauth2/v2.0/token" -Body @{
+        client_id     = $Client
+        client_secret = $plano
+        scope         = 'https://graph.microsoft.com/.default'
+        grant_type    = 'client_credentials'
+    }
+} catch {
+    $msg = $_.Exception.Message
+    try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error_description } catch { }
+    throw "No se pudo obtener el token: $msg"
+} finally {
+    # el secreto deja de estar en memoria en cuanto no hace falta
+    $plano = $null
+    [GC]::Collect()
+}
+$Token = $tok.access_token
+Write-Host 'Token obtenido. La aplicacion consulta en su propio nombre.' -ForegroundColor Green
+
+`;
+  const authModulo = `
+# --- Autenticacion con el modulo oficial de Microsoft ------------------------
+# Aviso: Microsoft.Graph.Authentication v2 suele fallar en Windows PowerShell 5.1
+# con TypeLoadException. Si ocurre, usa PowerShell 7 (pwsh) o marca en el tablero
+# "Usar mi propio registro", que genera una version sin modulo.
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    Write-Host ''
+    Write-Host 'AVISO: estas en Windows PowerShell ' -NoNewline -ForegroundColor Yellow
+    Write-Host $PSVersionTable.PSVersion -ForegroundColor Yellow
+    Write-Host 'El modulo de Microsoft esta pensado para PowerShell 7. Si falla al importarse:' -ForegroundColor Yellow
+    Write-Host '  1) Instala PowerShell 7:  winget install Microsoft.PowerShell' -ForegroundColor Yellow
+    Write-Host '     y vuelve a ejecutar este script con  pwsh' -ForegroundColor Yellow
+    Write-Host '  2) O marca "Usar mi propio registro" en el tablero: no usa modulo.' -ForegroundColor Yellow
+    Write-Host ''
+}
+if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
+    Write-Host 'Instalando Microsoft.Graph.Authentication para el usuario actual...' -ForegroundColor Yellow
+    Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
+}
+Import-Module Microsoft.Graph.Authentication
+
+Write-Host 'Iniciando sesion...' -ForegroundColor Cyan
+Connect-MgGraph -Scopes '${scope}' -NoWelcome
+$ctx = Get-MgContext
+Write-Host ("Conectado como {0} en {1}" -f $ctx.Account, $ctx.TenantId) -ForegroundColor Green
+
+`;
+  return modo === 'aplicacion' ? authApp : modo === 'dispositivo' ? authRest : authModulo;
+}
+
+/** La funcion Exportar de Defender: una consulta KQL por llamada. */
+function expDefender(modo) {
+  return modo === 'microsoft' ? `
+function Exportar {
+    param([string]$Nombre, [string]$Titulo, [string]$Kql)
+    Write-Host ("-> {0}: consultando..." -f $Titulo) -NoNewline
+    try {
+        $resp = Invoke-MgGraphRequest -Method POST \`
+            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' \`
+            -Body (@{ Query = $Kql } | ConvertTo-Json -Depth 4 -Compress) \`
+            -ContentType 'application/json'
+    } catch {
+        Write-Host ''
+        Write-Host ("   ERROR: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        return
+    }
+    $filas = $resp.results
+    if (-not $filas -or $filas.Count -eq 0) { Write-Host ' sin filas' -ForegroundColor DarkYellow; return }
+    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
+    $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
+    Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
+}
+` : `
+function Exportar {
+    param([string]$Nombre, [string]$Titulo, [string]$Kql)
+    Write-Host ("-> {0}: consultando..." -f $Titulo) -NoNewline
+    try {
+        $resp = Invoke-RestMethod -Method POST \`
+            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' \`
+            -Headers @{ Authorization = "Bearer $Token" } \`
+            -ContentType 'application/json' \`
+            -Body (@{ Query = $Kql } | ConvertTo-Json -Depth 4 -Compress)
+    } catch {
+        Write-Host ''
+        $msg = $_.Exception.Message
+        try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error.message } catch { }
+        Write-Host ("   ERROR: {0}" -f $msg) -ForegroundColor Red
+        return
+    }
+    $filas = $resp.results
+    if (-not $filas -or $filas.Count -eq 0) { Write-Host ' sin filas' -ForegroundColor DarkYellow; return }
+    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
+    $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
+    Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
+}
+`;
+}
+
+/* ---- 24.5b extraccion desde Intune --------------------------------------
+   Intune no expone KQL, pero si algo que Advanced Hunting no tiene: trabajos de
+   exportacion. Se pide un informe, Intune lo genera en segundo plano y devuelve
+   un enlace temporal a un ZIP. No hay tope de 100.000 filas, asi que el
+   inventario completo sale de una sola vez.
+   ------------------------------------------------------------------------ */
+const INFORMES_INTUNE = {
+  parque: ['Parque de equipos', 'DevicesWithInventory', []],
+  catalogo: ['Catalogo agregado', 'AppInvAggregate',
+    ['ApplicationName', 'ApplicationPublisher', 'ApplicationVersion', 'Platform', 'DeviceCount']],
+  detalle: ['Detalle crudo por equipo', 'AppInvRawData',
+    ['DeviceName', 'UserName', 'ApplicationName', 'ApplicationPublisher', 'ApplicationVersion',
+     'Platform', 'OSDescription', 'OSVersion']]
+};
+
+function scriptIntune(opts, modo) {
+  opts = opts || {};
+  const ps = a => a.length ? "@('" + a.join("', '") + "')" : '@()';
+  let cuerpo = '';
+  for (const id of ['parque', 'catalogo', 'detalle']) {
+    if (!opts[id]) continue;
+    const [titulo, reporte, cols] = INFORMES_INTUNE[id];
+    cuerpo += `
+Exportar-Informe -Nombre '${id}' -Titulo '${titulo}' -Reporte '${reporte}' \`
+                 -Columnas ${ps(cols)} -Filtro $Filtro
+`;
+  }
+
+  const rest = modo !== 'microsoft';
+  const puente = rest ? `
+function GraphPost { param($Uri, $Body)
+    Invoke-RestMethod -Method POST -Uri $Uri -Headers @{ Authorization = "Bearer $Token" } \`
+        -ContentType 'application/json' -Body $Body
+}
+function GraphGet { param($Uri)
+    Invoke-RestMethod -Method GET -Uri $Uri -Headers @{ Authorization = "Bearer $Token" }
+}` : `
+function GraphPost { param($Uri, $Body)
+    Invoke-MgGraphRequest -Method POST -Uri $Uri -Body $Body -ContentType 'application/json' -OutputType PSObject
+}
+function GraphGet { param($Uri)
+    Invoke-MgGraphRequest -Method GET -Uri $Uri -OutputType PSObject
+}`;
+
+  return `<#
+    Inventario de Aplicaciones - extraccion desde Microsoft Intune
+    Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
+    Modo: ${modo === 'aplicacion' ? 'permiso de APLICACION con client secret (sin usuario)'
+          : modo === 'dispositivo' ? 'registro propio, codigo de dispositivo, sin modulo'
+          : 'modulo oficial de Microsoft (recomendado PowerShell 7)'}
+
+    Por que Intune y no Advanced Hunting:
+      Los informes de Intune se entregan como archivo, no como respuesta de una
+      consulta, asi que NO se aplica el tope de 100.000 filas de la consola de
+      Defender. El inventario completo sale entero, sin lotes.
+
+    Lo que no trae, y por eso Defender sigue haciendo falta:
+      - EndOfSupportStatus (software fuera de soporte)
+      - Vulnerabilidades y CVE
+      - Equipos con sensor de Defender que no esten inscritos en Intune
+
+    Permiso necesario:  DeviceManagementManagedDevices.Read.All
+
+    Uso:
+      1. Abre PowerShell (no hace falta como administrador).
+      2. Ejecuta:  .\\extraer-intune.ps1
+      3. Espera: un informe grande tarda varios minutos en generarse.
+      4. Arrastra los CSV de la carpeta 'salida' al tablero, todos a la vez.
+#>
+
+$ErrorActionPreference = 'Stop'
+$Salida = Join-Path $PSScriptRoot 'salida'
+if (-not $Salida) { $Salida = Join-Path (Get-Location) 'salida' }
+if (-not (Test-Path $Salida)) { New-Item -ItemType Directory -Path $Salida | Out-Null }
+
+# Filtro OData del informe. Ojo: no es KQL, y cada informe admite unos campos
+# distintos. Ejemplos:  (OS eq 'Windows')   ·   (ApplicationName eq 'Google Chrome')
+$Filtro = '${psEsc((opts.filtro || '').replace(/[\r\n]+/g, ' ').trim())}'
+${bloqueAuth(modo, 'DeviceManagementManagedDevices.Read.All')}${puente}
+
+$script:ApiIntune = 'beta'
+
+function Exportar-Informe {
+    param([string]$Nombre, [string]$Titulo, [string]$Reporte, [string[]]$Columnas, [string]$Filtro)
+
+    Write-Host ("-> {0}  ({1})" -f $Titulo, $Reporte) -ForegroundColor Cyan
+    $cuerpo = @{ reportName = $Reporte; format = 'csv' }
+    if ($Columnas -and $Columnas.Count -gt 0) { $cuerpo['select'] = $Columnas }
+    if ($Filtro) { $cuerpo['filter'] = $Filtro }
+
+    # Se prueban beta y v1.0: no todos los informes estan publicados en ambas.
+    # Si falla con la lista de columnas, se reintenta sin ella, porque los
+    # nombres de columna cambian entre versiones del informe.
+    $trabajo = $null; $fallo = 'sin detalle'
+    foreach ($vuelta in 1..2) {
+        foreach ($v in @('beta', 'v1.0')) {
+            try {
+                $trabajo = GraphPost "https://graph.microsoft.com/$v/deviceManagement/reports/exportJobs" \`
+                                     ($cuerpo | ConvertTo-Json -Depth 4 -Compress)
+                $script:ApiIntune = $v
+                break
+            } catch {
+                $fallo = $_.Exception.Message
+                try { $fallo = ($_.ErrorDetails.Message | ConvertFrom-Json).error.message } catch { }
+            }
+        }
+        if ($trabajo) { break }
+        if ($vuelta -eq 1 -and $cuerpo.ContainsKey('select')) {
+            Write-Host '   la lista de columnas no le gusta; reintento sin ella' -ForegroundColor DarkYellow
+            $cuerpo.Remove('select')
+        } else { break }
+    }
+    if (-not $trabajo) {
+        Write-Host ("   ERROR: {0}" -f $fallo) -ForegroundColor Red
+        if ($Filtro) { Write-Host '   (el filtro puede ser el culpable: cada informe admite otros campos)' -ForegroundColor DarkYellow }
+        return
+    }
+
+    Write-Host '   generando' -NoNewline
+    $reloj = [Diagnostics.Stopwatch]::StartNew()
+    while ($trabajo.status -ne 'completed') {
+        if ($trabajo.status -eq 'failed') {
+            Write-Host ''; Write-Host '   ERROR: Intune marco el trabajo como fallido' -ForegroundColor Red; return
+        }
+        if ($reloj.Elapsed.TotalMinutes -gt 45) {
+            Write-Host ''; Write-Host '   ERROR: mas de 45 minutos esperando; lo dejo' -ForegroundColor Red; return
+        }
+        Start-Sleep -Seconds 6
+        Write-Host '.' -NoNewline
+        $trabajo = GraphGet ("https://graph.microsoft.com/{0}/deviceManagement/reports/exportJobs('{1}')" \`
+                             -f $script:ApiIntune, $trabajo.id)
+    }
+    Write-Host (" listo en {0:n0}s" -f $reloj.Elapsed.TotalSeconds)
+
+    # El enlace ya viene firmado por Azure. NO se le manda cabecera de
+    # autorizacion: el almacenamiento la rechaza si la ve.
+    $zip = Join-Path $Salida ("{0}.zip" -f $Nombre)
+    $tmp = Join-Path $Salida ("_{0}" -f $Nombre)
+    $antes = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'
+    try { Invoke-WebRequest -Uri $trabajo.url -OutFile $zip -UseBasicParsing }
+    finally { $ProgressPreference = $antes }
+
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    Expand-Archive -Path $zip -DestinationPath $tmp -Force
+    $csv = Get-ChildItem $tmp -Filter *.csv -Recurse | Select-Object -First 1
+    if (-not $csv) { Write-Host '   ERROR: el ZIP no traia ningun CSV' -ForegroundColor Red; return }
+
+    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
+    Move-Item $csv.FullName $ruta -Force
+    Remove-Item $tmp -Recurse -Force
+    Remove-Item $zip -Force
+
+    # cuenta en streaming: un detalle completo no cabe en memoria de golpe
+    $n = 0
+    foreach ($linea in [IO.File]::ReadLines($ruta)) { $n++ }
+    Write-Host ("   {0:n0} lineas -> {1}" -f [Math]::Max(0, $n - 1), (Split-Path $ruta -Leaf)) -ForegroundColor Green
+}
+${cuerpo}
+Write-Host ''
+Write-Host ("Listo. Archivos en: {0}" -f $Salida) -ForegroundColor Cyan
+Write-Host 'Arrastralos TODOS a la vez sobre el tablero: se funden en un solo modelo.' -ForegroundColor Cyan
+${modo === 'microsoft' ? 'Disconnect-MgGraph | Out-Null\n' : ''}`;
+}
+
 /* ---- 24.5 script de PowerShell -----------------------------------------
    Camino sin registrar ninguna aplicacion: el modulo oficial de Microsoft ya
    trae su propio registro multi-tenant, asi que el usuario solo inicia sesion.
@@ -3674,198 +4021,6 @@ ${q(kqlDetalle(0, lotes))}
 }
 ` : '';
 
-  /* ---- autenticacion ---- */
-  const authRest = `
-# --- Autenticacion por codigo de dispositivo, SIN MODULO ---------------------
-# Microsoft.Graph.Authentication v2 falla al cargarse en Windows PowerShell 5.1
-# con un TypeLoadException: sus ensamblados apuntan a .NET moderno. Aqui se
-# habla directamente con el endpoint de OAuth, asi que no hace falta el modulo
-# ni PowerShell 7.
-$Client = '${kqlEsc(g.clientId || '')}'
-$Tenant = '${kqlEsc(g.tenantId || '')}'
-$Scope  = 'https://graph.microsoft.com/ThreatHunting.Read.All offline_access'
-if (-not $Client -or -not $Tenant) { throw 'Faltan el Application ID y el Directory ID. Rellenalos en Origen de datos y vuelve a descargar el script.' }
-
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$base = "https://login.microsoftonline.com/$Tenant/oauth2/v2.0"
-
-Write-Host 'Solicitando codigo de inicio de sesion...' -ForegroundColor Cyan
-$dc = Invoke-RestMethod -Method POST -Uri "$base/devicecode" -Body @{ client_id = $Client; scope = $Scope }
-Write-Host ''
-Write-Host '  ------------------------------------------------------------'
-Write-Host ("  Abre  {0}" -f $dc.verification_uri) -ForegroundColor Yellow
-Write-Host ("  Codigo: {0}" -f $dc.user_code) -ForegroundColor Yellow
-Write-Host '  ------------------------------------------------------------'
-Write-Host ''
-try { Start-Process $dc.verification_uri } catch { }
-
-$tok = $null
-$limite = (Get-Date).AddSeconds([int]$dc.expires_in)
-$espera = [Math]::Max(5, [int]$dc.interval)
-while (-not $tok -and (Get-Date) -lt $limite) {
-    Start-Sleep -Seconds $espera
-    try {
-        $tok = Invoke-RestMethod -Method POST -Uri "$base/token" -Body @{
-            client_id   = $Client
-            grant_type  = 'urn:ietf:params:oauth:grant-type:device_code'
-            device_code = $dc.device_code
-        }
-    } catch {
-        $detalle = ''
-        try { $detalle = ($_.ErrorDetails.Message | ConvertFrom-Json).error } catch { }
-        if ($detalle -eq 'slow_down') { $espera += 5 }
-        elseif ($detalle -ne 'authorization_pending') {
-            $msg = ''
-            try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error_description } catch { $msg = $_.Exception.Message }
-            throw $msg
-        }
-    }
-}
-if (-not $tok) { throw 'Se agoto el tiempo de espera del inicio de sesion.' }
-$Token = $tok.access_token
-Write-Host 'Sesion iniciada correctamente.' -ForegroundColor Green
-
-function Exportar {
-    param([string]$Nombre, [string]$Titulo, [string]$Kql)
-    Write-Host ("-> {0}: consultando..." -f $Titulo) -NoNewline
-    try {
-        $resp = Invoke-RestMethod -Method POST \`
-            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' \`
-            -Headers @{ Authorization = "Bearer $Token" } \`
-            -ContentType 'application/json' \`
-            -Body (@{ Query = $Kql } | ConvertTo-Json -Depth 4 -Compress)
-    } catch {
-        Write-Host ''
-        $msg = $_.Exception.Message
-        try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error.message } catch { }
-        Write-Host ("   ERROR: {0}" -f $msg) -ForegroundColor Red
-        return
-    }
-    $filas = $resp.results
-    if (-not $filas -or $filas.Count -eq 0) { Write-Host ' sin filas' -ForegroundColor DarkYellow; return }
-    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
-    $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
-    Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
-}
-`;
-
-  const authApp = `
-# --- Autenticacion de APLICACION (client credentials) ------------------------
-# El permiso ThreatHunting.Read.All esta concedido como permiso de APLICACION,
-# no delegado: la app se autentica contra si misma y no hay usuario de por medio.
-# Eso evita tanto la asignacion de usuario como la URI de redireccion.
-#
-# El secreto NO va escrito en este archivo. Se pide al ejecutar, o se lee de la
-# variable de entorno DEFENDER_SECRET si prefieres automatizarlo sin teclearlo.
-$Client = '${kqlEsc(g.clientId || '')}'
-$Tenant = '${kqlEsc(g.tenantId || '')}'
-if (-not $Client -or -not $Tenant) { throw 'Faltan el Application ID y el Directory ID. Rellenalos en Origen de datos y vuelve a descargar el script.' }
-
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-if ($env:DEFENDER_SECRET) {
-    $plano = $env:DEFENDER_SECRET
-    Write-Host 'Usando el secreto de la variable de entorno DEFENDER_SECRET.' -ForegroundColor DarkGray
-} else {
-    Write-Host 'Pega el client secret (no se vera al escribir y no se guarda en ningun sitio):' -ForegroundColor Cyan
-    $seguro = Read-Host -AsSecureString
-    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($seguro)
-    try { $plano = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr) }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-}
-if (-not $plano) { throw 'No se recibio ningun secreto.' }
-
-Write-Host 'Solicitando token de aplicacion...' -ForegroundColor Cyan
-try {
-    $tok = Invoke-RestMethod -Method POST -Uri "https://login.microsoftonline.com/$Tenant/oauth2/v2.0/token" -Body @{
-        client_id     = $Client
-        client_secret = $plano
-        scope         = 'https://graph.microsoft.com/.default'
-        grant_type    = 'client_credentials'
-    }
-} catch {
-    $msg = $_.Exception.Message
-    try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error_description } catch { }
-    throw "No se pudo obtener el token: $msg"
-} finally {
-    # el secreto deja de estar en memoria en cuanto no hace falta
-    $plano = $null
-    [GC]::Collect()
-}
-$Token = $tok.access_token
-Write-Host 'Token obtenido. La aplicacion consulta en su propio nombre.' -ForegroundColor Green
-
-function Exportar {
-    param([string]$Nombre, [string]$Titulo, [string]$Kql)
-    Write-Host ("-> {0}: consultando..." -f $Titulo) -NoNewline
-    try {
-        $resp = Invoke-RestMethod -Method POST \`
-            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' \`
-            -Headers @{ Authorization = "Bearer $Token" } \`
-            -ContentType 'application/json' \`
-            -Body (@{ Query = $Kql } | ConvertTo-Json -Depth 4 -Compress)
-    } catch {
-        Write-Host ''
-        $msg = $_.Exception.Message
-        try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error.message } catch { }
-        Write-Host ("   ERROR: {0}" -f $msg) -ForegroundColor Red
-        return
-    }
-    $filas = $resp.results
-    if (-not $filas -or $filas.Count -eq 0) { Write-Host ' sin filas' -ForegroundColor DarkYellow; return }
-    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
-    $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
-    Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
-}
-`;
-
-  const authModulo = `
-# --- Autenticacion con el modulo oficial de Microsoft ------------------------
-# Aviso: Microsoft.Graph.Authentication v2 suele fallar en Windows PowerShell 5.1
-# con TypeLoadException. Si ocurre, usa PowerShell 7 (pwsh) o marca en el tablero
-# "Usar mi propio registro", que genera una version sin modulo.
-if ($PSVersionTable.PSVersion.Major -lt 6) {
-    Write-Host ''
-    Write-Host 'AVISO: estas en Windows PowerShell ' -NoNewline -ForegroundColor Yellow
-    Write-Host $PSVersionTable.PSVersion -ForegroundColor Yellow
-    Write-Host 'El modulo de Microsoft esta pensado para PowerShell 7. Si falla al importarse:' -ForegroundColor Yellow
-    Write-Host '  1) Instala PowerShell 7:  winget install Microsoft.PowerShell' -ForegroundColor Yellow
-    Write-Host '     y vuelve a ejecutar este script con  pwsh' -ForegroundColor Yellow
-    Write-Host '  2) O marca "Usar mi propio registro" en el tablero: no usa modulo.' -ForegroundColor Yellow
-    Write-Host ''
-}
-if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-    Write-Host 'Instalando Microsoft.Graph.Authentication para el usuario actual...' -ForegroundColor Yellow
-    Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
-}
-Import-Module Microsoft.Graph.Authentication
-
-Write-Host 'Iniciando sesion...' -ForegroundColor Cyan
-Connect-MgGraph -Scopes 'ThreatHunting.Read.All' -NoWelcome
-$ctx = Get-MgContext
-Write-Host ("Conectado como {0} en {1}" -f $ctx.Account, $ctx.TenantId) -ForegroundColor Green
-
-function Exportar {
-    param([string]$Nombre, [string]$Titulo, [string]$Kql)
-    Write-Host ("-> {0}: consultando..." -f $Titulo) -NoNewline
-    try {
-        $resp = Invoke-MgGraphRequest -Method POST \`
-            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' \`
-            -Body (@{ Query = $Kql } | ConvertTo-Json -Depth 4 -Compress) \`
-            -ContentType 'application/json'
-    } catch {
-        Write-Host ''
-        Write-Host ("   ERROR: {0}" -f $_.Exception.Message) -ForegroundColor Red
-        return
-    }
-    $filas = $resp.results
-    if (-not $filas -or $filas.Count -eq 0) { Write-Host ' sin filas' -ForegroundColor DarkYellow; return }
-    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
-    $filas | ForEach-Object { [PSCustomObject]$_ } | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
-    Write-Host (" {0} filas -> {1}" -f $filas.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
-}
-`;
-
   return `<#
     Inventario de Aplicaciones - extraccion desde Microsoft Defender
     Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
@@ -3884,7 +4039,7 @@ $ErrorActionPreference = 'Stop'
 $Salida = Join-Path $PSScriptRoot 'salida'
 if (-not $Salida) { $Salida = Join-Path (Get-Location) 'salida' }
 if (-not (Test-Path $Salida)) { New-Item -ItemType Directory -Path $Salida | Out-Null }
-${modo === 'aplicacion' ? authApp : modo === 'dispositivo' ? authRest : authModulo}${plantilla}${cuerpo}
+${bloqueAuth(modo, 'ThreatHunting.Read.All')}${expDefender(modo)}${plantilla}${cuerpo}
 Write-Host ''
 Write-Host ("Listo. Archivos en: {0}" -f $Salida) -ForegroundColor Cyan
 Write-Host 'Arrastralos TODOS a la vez sobre el tablero: se funden en un solo modelo.' -ForegroundColor Cyan
@@ -4077,6 +4232,59 @@ function vDatos(A, rows) {
           La primera vez, un administrador debe consentir el permiso <b>ThreatHunting.Read.All</b>
           para Microsoft Graph PowerShell. El propio diálogo de inicio de sesión ofrece el botón.
           No es un registro de aplicación: es aprobar una que ya existe.
+        </div></div>
+      </div>
+    </div>` +
+    sec('Intune', 'El camino sin tope de filas: los informes se entregan como archivo, no como respuesta') +
+    `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
+      <b>Intune no tiene el límite de 100.000 filas.</b> Advanced Hunting responde a una consulta y ahí
+      está el tope; Intune genera un <b>informe en segundo plano</b> y te devuelve un enlace a un ZIP, así
+      que el inventario completo sale entero y sin lotes. A cambio no trae <code>EndOfSupportStatus</code>,
+      ni vulnerabilidades, ni los equipos que tengan sensor de Defender pero no estén inscritos en Intune:
+      para eso sigue haciendo falta Defender. <b>Puedes cargar los dos</b>: el tablero los funde.
+    </div></div>
+    <div class="adm-grid">
+      <div class="card"><div class="card-h"><div><h3>Script de PowerShell</h3>
+        <p>Pide los informes, espera a que se generen y descomprime los CSV</p></div></div>
+        <div style="margin-top:14px">
+          <label class="chk" style="margin-bottom:8px"><input type="checkbox" id="inParque" checked>
+            Parque de equipos <span class="mini" style="color:var(--ink-4)">· DevicesWithInventory</span></label><br>
+          <label class="chk" style="margin-bottom:8px"><input type="checkbox" id="inCatalogo" checked>
+            Catálogo agregado <span class="mini" style="color:var(--ink-4)">· AppInvAggregate</span></label><br>
+          <label class="chk" style="margin-bottom:12px"><input type="checkbox" id="inDetalle">
+            Detalle crudo por equipo <span class="mini" style="color:var(--ink-4)">· AppInvRawData</span></label>
+          <div class="fld"><label for="inModo">Cómo se autentica</label>
+            <select id="inModo">
+              <option value="aplicacion">Permiso de aplicación · client secret (sin usuario)</option>
+              <option value="dispositivo">Mi registro · código de dispositivo (permiso delegado)</option>
+              <option value="microsoft">App de Microsoft · módulo Graph (permiso delegado)</option>
+            </select>
+            <span class="hint" id="inAyuda">${AYUDA_MODO.aplicacion}</span>
+          </div>
+          <div class="fld"><label for="inFiltro">Filtro del informe (opcional)</label>
+            <input id="inFiltro" spellcheck="false" placeholder="(OS eq 'Windows')">
+            <span class="hint">Es <b>OData, no KQL</b>: nada que ver con el filtro de Advanced Hunting de
+              arriba. Cada informe admite unos campos distintos, así que si falla, déjalo vacío.</span></div>
+          <button class="btn btn-p" data-gx="intune">Descargar extraer-intune.ps1</button>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><div><h3>Qué permiso necesita</h3>
+        <p>Uno solo, y es de los que ya suele estar concedido</p></div></div>
+        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
+          <p style="margin:0 0 10px">Con <code>DeviceManagementManagedDevices.Read.All</code> basta para
+            los tres informes. Si además tienes <code>DeviceManagementApps.Read.All</code> y
+            <code>Directory.Read.All</code>, no estorban, pero no hacen falta aquí.</p>
+          <p style="margin:0 0 10px">Como el permiso figura de tipo <b>Aplicación</b>, la app se autentica
+            contra sí misma: no hay usuario, y por eso no aplican ni la asignación de usuario ni la URI de
+            redirección. Eso sí, <b>necesita una credencial</b>: un client secret o un certificado.</p>
+          <p style="margin:0">El secreto <b>no viaja dentro del script</b>. Se pide al ejecutarlo, o se lee
+            de la variable <code>GRAPH_SECRET</code>, y se borra de memoria en cuanto se canjea el token.</p>
+        </div>
+        <div class="banner" style="margin:14px 0 0">${ico('shield')}<div>
+          El informe grande tarda: <code>AppInvRawData</code> de un parque de 26.000 equipos son más de un
+          millón de filas y puede pasar de diez minutos generándose. El script espera solo, con puntos.
+          <b>No lo cargues entero en el tablero</b>: el navegador no aguanta ese detalle. Para el análisis
+          usa parque + catálogo, y el detalle solo acotado con el filtro.
         </div></div>
       </div>
     </div>` +
@@ -4557,7 +4765,10 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const el = e.target;
-  if (el.id === 'psModo') { const h = $('#psAyuda'); if (h) h.innerHTML = AYUDA_MODO[el.value] || ''; return; }
+  if (el.id === 'psModo' || el.id === 'inModo') {
+    const h = $(el.id === 'psModo' ? '#psAyuda' : '#inAyuda');
+    if (h) h.innerHTML = AYUDA_MODO[el.value] || ''; return;
+  }
   if (el.matches && el.matches('[data-fdim]')) {
     const d = el.getAttribute('data-fdim'), v = el.value;
     if (!v) delete S.f[d]; else S.f[d] = new Set([v]);
@@ -4644,6 +4855,15 @@ async function gxAction(a) {
       render();
     } catch (e) { toast(e.message); }
     return;
+  }
+  if (a === 'intune') {
+    const opts = { parque: !!($('#inParque') || {}).checked,
+                   catalogo: !!($('#inCatalogo') || {}).checked,
+                   detalle: !!($('#inDetalle') || {}).checked,
+                   filtro: (($('#inFiltro') || {}).value || '').trim() };
+    if (!opts.parque && !opts.catalogo && !opts.detalle) { toast('Marca al menos un informe'); return; }
+    const modo = ($('#inModo') || {}).value || 'aplicacion';
+    return saveFile('extraer-intune.ps1', scriptIntune(opts, modo), 'text/plain;charset=utf-8');
   }
   if (a === 'ps') {
     const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));

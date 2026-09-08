@@ -33,13 +33,17 @@ const TOPES = [1000, 5000, 10000, 30000, 50000, 100000, 200000, 500000];
 
 /** Clasifica el archivo por las columnas que trae. */
 function shapeOf(cols) {
-  const conApp = cols.app != null || cols.vendor != null;
+  // Lo que define una fila de aplicacion es el NOMBRE de la aplicacion. Un
+  // fabricante suelto no basta: en un parque de equipos, «Manufacturer» es
+  // quien fabrico el portatil, no quien publica el software. Darlo por bueno
+  // metia un equipo fantasma por fila en el catalogo.
+  const conApp = cols.app != null;
   const conDev = cols.device != null;
   const conCnt = cols.count != null;
   if (conApp && conCnt && !conDev) return 'agregado';
   if (conApp && conDev) return 'detalle';
   if (conApp && conCnt) return 'agregado';
-  if (conDev && !conApp) return 'parque';
+  if (conDev) return 'parque';
   if (conApp) return 'detalle';
   return null;
 }

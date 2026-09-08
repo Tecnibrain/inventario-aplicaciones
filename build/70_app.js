@@ -416,7 +416,10 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const el = e.target;
-  if (el.id === 'psModo') { const h = $('#psAyuda'); if (h) h.innerHTML = AYUDA_MODO[el.value] || ''; return; }
+  if (el.id === 'psModo' || el.id === 'inModo') {
+    const h = $(el.id === 'psModo' ? '#psAyuda' : '#inAyuda');
+    if (h) h.innerHTML = AYUDA_MODO[el.value] || ''; return;
+  }
   if (el.matches && el.matches('[data-fdim]')) {
     const d = el.getAttribute('data-fdim'), v = el.value;
     if (!v) delete S.f[d]; else S.f[d] = new Set([v]);
@@ -503,6 +506,15 @@ async function gxAction(a) {
       render();
     } catch (e) { toast(e.message); }
     return;
+  }
+  if (a === 'intune') {
+    const opts = { parque: !!($('#inParque') || {}).checked,
+                   catalogo: !!($('#inCatalogo') || {}).checked,
+                   detalle: !!($('#inDetalle') || {}).checked,
+                   filtro: (($('#inFiltro') || {}).value || '').trim() };
+    if (!opts.parque && !opts.catalogo && !opts.detalle) { toast('Marca al menos un informe'); return; }
+    const modo = ($('#inModo') || {}).value || 'aplicacion';
+    return saveFile('extraer-intune.ps1', scriptIntune(opts, modo), 'text/plain;charset=utf-8');
   }
   if (a === 'ps') {
     const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));
