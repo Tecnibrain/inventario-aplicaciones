@@ -391,6 +391,7 @@ function vApp(A, rows, key) {
   // equipos afectados con su version efectiva
   const devVer = new Map();
   for (const x of rowsApp) {
+    if (!x.device) continue;          // las filas agregadas no nombran equipo
     const p = devVer.get(x.device);
     if (!p || (!VER_UNK.test(x.ver) && verCmp(x.ver, p) > 0)) devVer.set(x.device, x.ver);
   }
@@ -455,7 +456,11 @@ function vApp(A, rows, key) {
         body: eco }) +
     `</div>` +
     sec('Equipos con esta aplicación') +
-    mtable({ id:'appDev', title:'Equipos afectados', sub:`${fmt(devTbl.length)} equipos`,
+    mtable({ id:'appDev', title:'Equipos afectados',
+      sub: devTbl.length < total
+        ? `${fmt(devTbl.length)} de ${fmt(total)} equipos, los que se conoce el nombre. ` +
+          `El resto viene de un catálogo agregado, que cuenta cuántos hay en cada versión pero no cuáles`
+        : `${fmt(devTbl.length)} equipos`,
       data: devTbl, sort:{ k:'estado', d:1 },
       rowAttr: x => `data-godev="${esc(x.dev)}"`,
       cols:[{ k:'dev', l:'Equipo', cls:'name' }, { k:'user', l:'Usuario' },

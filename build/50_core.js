@@ -133,20 +133,36 @@ function guessCat(key) {
  * instalada. Es la que decide su estado, no cada entrada suelta del inventario.
  */
 function effVersions(rows) {
-  const out = new Map();                       // appKey -> Map(device -> version)
+  // appKey -> { dev: Map(equipo -> version), agg: Map(version -> peso) }
+  const out = new Map();
   for (const r of rows) {
-    let m = out.get(r.appKey); if (!m) out.set(r.appKey, m = new Map());
-    const p = m.get(r.device);
-    if (p === undefined || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) m.set(r.device, r.ver);
+    let e = out.get(r.appKey);
+    if (!e) out.set(r.appKey, e = { dev: new Map(), agg: new Map() });
+    if (!r.device) {
+      // Una fila agregada vale por r.w equipos, y hay que contarla como tal.
+      // Indexada por equipo caia bajo la clave '' junto con todas las demas, se
+      // pisaban entre si y la aplicacion entera contaba como UN equipo: el
+      // percentil no llegaba nunca al 50 % y el estandar se sembraba en la
+      // version mas antigua, con lo que todo el parque salia cumpliendo.
+      if (!VER_UNK.test(r.ver)) e.agg.set(r.ver, (e.agg.get(r.ver) || 0) + (r.w || 1));
+      continue;
+    }
+    const p = e.dev.get(r.device);
+    if (p === undefined || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) e.dev.set(r.device, r.ver);
   }
   return out;
 }
 /** Reparto de equipos por version efectiva, de la mas nueva a la mas antigua. */
-function verSpread(devVer) {
+function verSpread(e) {
+  if (!e) return [];
+  const dev = e.dev || e, agg = e.agg;   // admite tambien un Map suelto
   const c = new Map();
-  devVer.forEach(v => { if (!VER_UNK.test(v)) c.set(v, (c.get(v) || 0) + 1); });
+  dev.forEach(v => { if (!VER_UNK.test(v)) c.set(v, (c.get(v) || 0) + 1); });
+  if (agg) agg.forEach((n, v) => c.set(v, (c.get(v) || 0) + n));
   return Array.from(c.entries()).sort((a, b) => verCmp(b[0], a[0]));
 }
+/** Cuantos equipos representa un reparto. */
+const spreadTotal = sp => sp.reduce((s, x) => s + x[1], 0);
 /**
  * Umbrales por defecto. Aprobar siempre la version mas alta detectada dejaria
  * el parque entero en rojo el primer dia: en un inventario real casi ningun
@@ -177,8 +193,10 @@ function seedCatalog() {
   const eff = M.effVer || (M.effVer = effVersions(M.rows));
   let nuevas = 0, actualizadas = 0;
   A.appDev.forEach((devs, k) => {
-    const spread = verSpread(eff.get(k) || new Map());
-    const { rec, min } = seedThresholds(spread, devs.size);
+    const spread = verSpread(eff.get(k));
+    // El total tiene que salir del mismo reparto, no de otra cuenta: si no
+    // coinciden, el percentil se desvia y el estandar sale mal sembrado.
+    const { rec, min } = seedThresholds(spread, spreadTotal(spread) || devs.size);
     const cat = guessCat(k);
     const gest = pct(devs.size, A.nDev) >= CFG.params.coberturaGestionada;
     const prev = CFG.apps[k];

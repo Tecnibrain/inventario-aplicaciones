@@ -578,26 +578,36 @@ function scriptResumir() {
       lo aguanta: reservar el archivo y decodificarlo a texto lo duplica, porque
       las cadenas de JavaScript son UTF-16.
 
-      Pero abrirlo entero no hace falta. Lo que el tablero usa de ese archivo es
-      el catalogo (aplicacion + version + cuantos equipos) y el parque (un
-      registro por equipo). Las dos cosas salen recorriendolo una vez, sin
-      guardarlo en memoria: de gigabytes salen unos pocos MB, y no se pierde
-      ningun equipo ni ninguna version.
+      Pero abrirlo entero no hace falta. De ese archivo salen tres cosas mucho
+      mas pequeñas, recorriendolo sin cargarlo en memoria:
 
-      Lo que si se pierde es saber QUE equipo tiene QUE aplicacion. Si necesitas
-      ese cruce, trae el detalle acotado con un filtro en vez de entero.
+        resumen_catalogo.csv     lo que esta en la version mas alta
+        resumen_parque.csv       un registro por equipo
+        resumen_excepciones.csv  QUE equipo tiene QUE version por detras
+
+      Los dos primeros y el tercero son complementarios: cada instalacion sale
+      en uno o en el otro, nunca en los dos. Si contaran las mismas dos veces,
+      el reparto de versiones saldria inflado. Por eso hay que cargar los TRES:
+      con solo el catalogo veras unicamente lo que ya esta al dia.
+
+      Las dos primeras dicen cuantos equipos hay en cada version. La tercera dice
+      cuales son, que es lo unico que el catalogo agregado no puede dar y lo que
+      hace falta para ir a arreglarlos. Solo lleva lo que va por detras de la
+      version mas alta vista, que es una fraccion pequeña del total.
 
     Uso:
       .\\resumir-detalle.ps1 -Ruta 'C:\\ruta\\salida\\detalle.csv'
-      (o ejecutalo sin nada y te pregunta la ruta)
+      .\\resumir-detalle.ps1 -Ruta '...' -Apps 'Chrome','Java'   # solo esas
+      .\\resumir-detalle.ps1 -Ruta '...' -SinExcepciones          # las dos primeras
 
-    Deja al lado del original:
-      resumen_catalogo.csv   aplicacion, version y numero de equipos
-      resumen_parque.csv     un registro por equipo
-    Arrastra los dos al tablero, a la vez.
+    Arrastra los TRES archivos al tablero, a la vez.
 #>
 
-param([string]$Ruta)
+param(
+    [string]$Ruta,
+    [string[]]$Apps,
+    [switch]$SinExcepciones
+)
 
 $ErrorActionPreference = 'Stop'
 if (-not $Ruta) { $Ruta = Read-Host 'Ruta del CSV grande' }
@@ -607,6 +617,7 @@ $Ruta = (Resolve-Path $Ruta).Path
 
 $info = Get-Item $Ruta
 Write-Host ("Archivo: {0}  ({1:n1} MB)" -f $info.Name, ($info.Length / 1MB)) -ForegroundColor Cyan
+if ($Apps) { Write-Host ("Solo aplicaciones que contengan: {0}" -f ($Apps -join ', ')) -ForegroundColor Cyan }
 
 # En PowerShell puro, un bucle de varios millones de vueltas tarda mas que todo
 # lo demas junto. Compilado, el limite pasa a ser el disco.
@@ -652,6 +663,70 @@ public class Resumidor
         return true;
     }
 
+    static string Tramo(string s, ref int i, out bool numerico)
+    {
+        numerico = char.IsDigit(s[i]);
+        int i0 = i;
+        while (i < s.Length && char.IsLetterOrDigit(s[i]) && char.IsDigit(s[i]) == numerico) i++;
+        return s.Substring(i0, i - i0);
+    }
+
+    // Comparar versiones como texto es el error clasico: "1.10" saldria por
+    // debajo de "1.9". Se compara tramo a tramo, y los numericos como numeros.
+    // Debe dar exactamente lo mismo que verCmp() del tablero: si discrepan,
+    // marcan cosas distintas.
+    static int CmpVer(string a, string b)
+    {
+        int i = 0, j = 0;
+        while (true)
+        {
+            while (i < a.Length && !char.IsLetterOrDigit(a[i])) i++;
+            while (j < b.Length && !char.IsLetterOrDigit(b[j])) j++;
+            bool finA = i >= a.Length, finB = j >= b.Length;
+            if (finA && finB) return 0;
+
+            string ta, tb;
+            bool da, db;
+            if (finA)
+            {
+                // "2.0" y "2.0.0" son la misma version: el tramo que falta vale
+                // cero, y solo decide si el otro no lo es.
+                tb = Tramo(b, ref j, out db);
+                if (!db) return -1;
+                ta = "0"; da = true;
+            }
+            else if (finB)
+            {
+                ta = Tramo(a, ref i, out da);
+                if (!da) return 1;
+                tb = "0"; db = true;
+            }
+            else
+            {
+                ta = Tramo(a, ref i, out da);
+                tb = Tramo(b, ref j, out db);
+            }
+
+            if (da && db)
+            {
+                // sin convertir a numero: un tramo puede no caber en un entero
+                string sa = ta.TrimStart('0'), sb = tb.TrimStart('0');
+                if (sa.Length != sb.Length) return sa.Length < sb.Length ? -1 : 1;
+                int c = string.CompareOrdinal(sa, sb);
+                if (c != 0) return c < 0 ? -1 : 1;
+            }
+            else if (da != db)
+            {
+                return da ? 1 : -1;   // un tramo numerico pesa mas que uno de letras
+            }
+            else
+            {
+                int c = string.Compare(ta, tb, StringComparison.OrdinalIgnoreCase);
+                if (c != 0) return c < 0 ? -1 : 1;
+            }
+        }
+    }
+
     static int Indice(List<string> cab, string[] candidatos)
     {
         for (int k = 0; k < candidatos.Length; k++)
@@ -674,35 +749,54 @@ public class Resumidor
         return "\\"" + s + "\\"";
     }
 
-    public static string Procesar(string ruta, string salidaCat, string salidaPar)
+    static int iDev, iApp, iVen, iVer, iUsr, iOs, iOsV;
+
+    static bool Cabecera(StreamReader r, List<string> cab, out string error)
     {
-        // aplicacion+version -> cuantas filas. En AppInvRawData cada equipo
-        // aparece una vez por aplicacion, asi que contar filas cuenta equipos.
+        error = null;
+        if (!LeerFila(r, cab)) { error = "El archivo esta vacio."; return false; }
+        if (cab.Count > 0 && cab[0].Length > 0 && cab[0][0] == '\\uFEFF') cab[0] = cab[0].Substring(1);
+
+        iDev = Indice(cab, new string[] { "DeviceName", "Device", "Equipo", "NombreEquipo", "ManagedDeviceName" });
+        iApp = Indice(cab, new string[] { "ApplicationName", "SoftwareName", "DisplayName", "Aplicacion" });
+        iVen = Indice(cab, new string[] { "ApplicationPublisher", "SoftwareVendor", "Publisher", "Fabricante" });
+        iVer = Indice(cab, new string[] { "ApplicationVersion", "SoftwareVersion", "Version" });
+        iUsr = Indice(cab, new string[] { "UserName", "UPN", "EmailAddress", "Usuario" });
+        iOs  = Indice(cab, new string[] { "OSDescription", "Platform", "OS", "OSDistribution" });
+        iOsV = Indice(cab, new string[] { "OSVersion", "OSVersionInfo" });
+
+        if (iApp < 0 && iDev < 0)
+        {
+            error = "No encuentro ni columna de aplicacion ni de equipo. Cabecera: " + string.Join(", ", cab.ToArray());
+            return false;
+        }
+        return true;
+    }
+
+    static bool Interesa(string app, string[] filtro)
+    {
+        if (filtro == null || filtro.Length == 0) return true;
+        for (int i = 0; i < filtro.Length; i++)
+            if (app.IndexOf(filtro[i], StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        return false;
+    }
+
+    public static string Procesar(string ruta, string salidaCat, string salidaPar,
+                                  string salidaExc, string[] filtro)
+    {
         Dictionary<string, int> apps = new Dictionary<string, int>(StringComparer.Ordinal);
-        // equipo -> su ficha, la primera que se vea
+        Dictionary<string, string> maxVer = new Dictionary<string, string>(StringComparer.Ordinal);
         Dictionary<string, string[]> devs = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
 
         long filas = 0;
         List<string> cab = new List<string>();
         List<string> f = new List<string>();
-        int iDev, iApp, iVen, iVer, iUsr, iOs, iOsV;
+        string error;
 
+        // --- pasada 1: contar, y quedarse con la version mas alta de cada app
         using (StreamReader r = new StreamReader(ruta, Encoding.UTF8, true, 1 << 20))
         {
-            if (!LeerFila(r, cab)) return "El archivo esta vacio.";
-            if (cab.Count > 0 && cab[0].Length > 0 && cab[0][0] == '\\uFEFF') cab[0] = cab[0].Substring(1);
-
-            iDev = Indice(cab, new string[] { "DeviceName", "Device", "Equipo", "NombreEquipo", "ManagedDeviceName" });
-            iApp = Indice(cab, new string[] { "ApplicationName", "SoftwareName", "DisplayName", "Aplicacion" });
-            iVen = Indice(cab, new string[] { "ApplicationPublisher", "SoftwareVendor", "Publisher", "Fabricante" });
-            iVer = Indice(cab, new string[] { "ApplicationVersion", "SoftwareVersion", "Version" });
-            iUsr = Indice(cab, new string[] { "UserName", "UPN", "EmailAddress", "Usuario" });
-            iOs  = Indice(cab, new string[] { "OSDescription", "Platform", "OS", "OSDistribution" });
-            iOsV = Indice(cab, new string[] { "OSVersion", "OSVersionInfo" });
-
-            if (iApp < 0 && iDev < 0)
-                return "No encuentro ni columna de aplicacion ni de equipo. Cabecera: " + string.Join(", ", cab.ToArray());
-
+            if (!Cabecera(r, cab, out error)) return error;
             while (LeerFila(r, f))
             {
                 if (f.Count == 1 && f[0].Length == 0) continue;
@@ -714,21 +808,41 @@ public class Resumidor
 
                 string app = Campo(f, iApp);
                 if (app.Length == 0) continue;
-                string clave = Campo(f, iVen) + "\\u0001" + app + "\\u0001" + Campo(f, iVer);
+                if (!Interesa(app, filtro)) continue;
+
+                string ven = Campo(f, iVen), ver = Campo(f, iVer);
+                string clave = ven + "\\u0001" + app + "\\u0001" + ver;
                 int n;
                 apps.TryGetValue(clave, out n);
                 apps[clave] = n + 1;
+
+                string claveApp = ven + "\\u0001" + app;
+                string alta;
+                if (!maxVer.TryGetValue(claveApp, out alta) || CmpVer(ver, alta) > 0)
+                    maxVer[claveApp] = ver;
             }
         }
 
+        // Si van a salir excepciones, el catalogo lleva SOLO lo que esta en la
+        // version mas alta. Lo demas va en el otro archivo con nombre de equipo,
+        // y contarlo en los dos sitios duplicaria cada instalacion atrasada.
+        bool soloAlMaximo = salidaExc != null;
+        long escritas = 0;
         using (StreamWriter w = new StreamWriter(salidaCat, false, new UTF8Encoding(true)))
         {
             w.WriteLine("SoftwareVendor,SoftwareName,SoftwareVersion,Equipos");
             foreach (KeyValuePair<string, int> kv in apps)
             {
                 string[] partes = kv.Key.Split('\\u0001');
+                if (soloAlMaximo)
+                {
+                    string alta;
+                    if (maxVer.TryGetValue(partes[0] + "\\u0001" + partes[1], out alta) &&
+                        CmpVer(partes[2], alta) < 0) continue;
+                }
                 w.WriteLine(Csv(partes[0]) + "," + Csv(partes[1]) + "," + Csv(partes[2]) + "," +
                             kv.Value.ToString(CultureInfo.InvariantCulture));
+                escritas++;
             }
         }
 
@@ -742,7 +856,38 @@ public class Resumidor
             }
         }
 
-        return string.Format(CultureInfo.InvariantCulture, "OK|{0}|{1}|{2}", filas, apps.Count, devs.Count);
+        long excep = 0;
+        if (salidaExc != null)
+        {
+            // --- pasada 2: QUE equipo va por detras. Es lo unico que el catalogo
+            // agregado no puede dar, y es una fraccion pequeña del archivo.
+            using (StreamReader r = new StreamReader(ruta, Encoding.UTF8, true, 1 << 20))
+            using (StreamWriter w = new StreamWriter(salidaExc, false, new UTF8Encoding(true)))
+            {
+                cab.Clear();
+                if (!Cabecera(r, cab, out error)) return error;
+                w.WriteLine("DeviceName,UserName,SoftwareVendor,SoftwareName,SoftwareVersion,Aprobada,OSVersionInfo");
+                while (LeerFila(r, f))
+                {
+                    if (f.Count == 1 && f[0].Length == 0) continue;
+                    string dev = Campo(f, iDev), app = Campo(f, iApp);
+                    if (dev.Length == 0 || app.Length == 0) continue;
+                    if (!Interesa(app, filtro)) continue;
+
+                    string ven = Campo(f, iVen), ver = Campo(f, iVer);
+                    string alta;
+                    if (!maxVer.TryGetValue(ven + "\\u0001" + app, out alta)) continue;
+                    if (CmpVer(ver, alta) >= 0) continue;
+
+                    w.WriteLine(Csv(dev) + "," + Csv(Campo(f, iUsr)) + "," + Csv(ven) + "," + Csv(app) + "," +
+                                Csv(ver) + "," + Csv(alta) + "," + Csv(Campo(f, iOsV)));
+                    excep++;
+                }
+            }
+        }
+
+        return string.Format(CultureInfo.InvariantCulture, "OK|{0}|{1}|{2}|{3}",
+                             filas, escritas, devs.Count, excep);
     }
 }
 '@
@@ -752,22 +897,35 @@ Add-Type -TypeDefinition $fuente -Language CSharp
 $carpeta = Split-Path $Ruta -Parent
 $salidaCat = Join-Path $carpeta 'resumen_catalogo.csv'
 $salidaPar = Join-Path $carpeta 'resumen_parque.csv'
+$salidaExc = if ($SinExcepciones) { $null } else { Join-Path $carpeta 'resumen_excepciones.csv' }
 
 Write-Host 'Recorriendo el archivo. No se carga en memoria; con varios GB tarda unos minutos...' -ForegroundColor Cyan
 $reloj = [Diagnostics.Stopwatch]::StartNew()
-$res = [Resumidor]::Procesar($Ruta, $salidaCat, $salidaPar)
+$res = [Resumidor]::Procesar($Ruta, $salidaCat, $salidaPar, $salidaExc, $Apps)
 $reloj.Stop()
 
 if (-not $res.StartsWith('OK|')) { throw $res }
 $partes = $res.Split('|')
+$nExc = [long]$partes[4]
 
 Write-Host ''
 Write-Host ("Listo en {0:n0} s" -f $reloj.Elapsed.TotalSeconds) -ForegroundColor Green
 Write-Host ("  {0,12:n0} filas leidas" -f [long]$partes[1])
-Write-Host ("  {0,12:n0} aplicacion+version  -> {1}" -f [int]$partes[2], (Split-Path $salidaCat -Leaf)) -ForegroundColor Green
+Write-Host ("  {0,12:n0} al dia              -> {1}" -f [int]$partes[2], (Split-Path $salidaCat -Leaf)) -ForegroundColor Green
 Write-Host ("  {0,12:n0} equipos             -> {1}" -f [int]$partes[3], (Split-Path $salidaPar -Leaf)) -ForegroundColor Green
+if ($salidaExc) {
+    Write-Host ("  {0,12:n0} desactualizados     -> {1}" -f $nExc, (Split-Path $salidaExc -Leaf)) -ForegroundColor Green
+    $mb = (Get-Item $salidaExc).Length / 1MB
+    Write-Host ("  {0,12:n1} MB de excepciones" -f $mb) -ForegroundColor DarkGray
+    if ($nExc -gt 400000) {
+        Write-Host ''
+        Write-Host 'AVISO: son muchas filas para el navegador.' -ForegroundColor Yellow
+        Write-Host 'No se ha recortado nada a proposito: un recorte silencioso sesga el analisis.' -ForegroundColor Yellow
+        Write-Host "Si no entra, vuelve a lanzarlo acotado:  -Apps 'Chrome','Java'" -ForegroundColor Yellow
+    }
+}
 Write-Host ''
-Write-Host 'Arrastra los DOS archivos al tablero, a la vez.' -ForegroundColor Cyan
+Write-Host 'Arrastra los archivos al tablero, todos a la vez.' -ForegroundColor Cyan
 `;
 }
 
@@ -1048,6 +1206,12 @@ function vDatos(A, rows) {
         <td><button class="tbtn" data-rmsrc="${i}" title="Quitar este archivo del modelo"
               style="color:var(--crit-ink);border-color:rgba(208,59,59,.35)">Quitar</button></td></tr>`).join('')}</tbody>
     </table></div>
+    ${M.solape ? `<div class="banner" style="margin:12px 0 0;border-color:rgba(208,59,59,.35)">${ico('shield')}<div>
+      <b>Hay ${fmt(M.solape)} combinaciones de aplicación y versión contadas dos veces.</b>
+      Un archivo agregado y uno de detalle traen las mismas instalaciones, y al fundirse se suman:
+      el reparto de versiones sale inflado. Quita uno de los dos, o usa archivos complementarios
+      (el catálogo con lo que está al día y las excepciones con lo atrasado).
+    </div></div>` : ''}
     <div class="dt-foot"><span>${fmt(M.sources.length)} archivo${M.sources.length > 1 ? 's' : ''} ·
       <b>${fmt(M.rows.length)}</b> filas · <b>${fmt(M.devInfo.size)}</b> equipos con ficha</span>
       <button class="btn" data-rmsrc="todas" style="margin-left:auto">Quitar todos</button>
@@ -1298,8 +1462,11 @@ function vDatos(A, rows) {
             recorre <b>en tu equipo</b>, sin cargarlo en memoria, y saca de él lo que el tablero sí usa:
             el catálogo y el parque. De gigabytes salen unos pocos MB, <b>sin perder ningún equipo ni
             ninguna versión</b>.</p>
-          <p style="margin:0 0 12px">Lo que sí se pierde es saber qué equipo tiene qué aplicación. Si
-            necesitas ese cruce, trae el detalle <b>acotado con el filtro</b> en vez de entero.</p>
+          <p style="margin:0 0 12px">Y saca también <b>qué equipo tiene qué versión por detrás</b>, que es
+            lo único que el catálogo agregado no puede dar: con él sabes <i>cuántos</i> equipos van
+            atrasados, pero no <i>cuáles</i>, y la tabla «Equipos con esta aplicación» sale vacía.
+            Solo lleva lo que va por detrás de la versión más alta, que es una fracción pequeña
+            del archivo.</p>
           <button class="btn" data-gx="resumir">Descargar resumir-detalle.ps1</button>
         </div>
       </div>

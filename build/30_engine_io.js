@@ -356,7 +356,12 @@ function verCmp(a, b) {
   const pa = String(a).match(/\d+|[a-zA-Z]+/g) || [], pb = String(b).match(/\d+|[a-zA-Z]+/g) || [];
   const n = Math.max(pa.length, pb.length);
   for (let i = 0; i < n; i++) {
-    const x = pa[i], y = pb[i];
+    let x = pa[i], y = pb[i];
+    // «2.0» y «2.0.0» son la misma version: el tramo que falta vale cero, y solo
+    // decide si el otro no lo es. Sin esto, un equipo al dia sale atrasado solo
+    // porque su fabricante escribe la version con un cero de mas.
+    if (x === undefined && /^\d+$/.test(y)) x = '0';
+    if (y === undefined && /^\d+$/.test(x)) y = '0';
     if (x === undefined) return -1;
     if (y === undefined) return 1;
     const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y);

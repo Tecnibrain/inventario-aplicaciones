@@ -170,6 +170,25 @@ function addSource(grid, fileName, sheet, reset) {
   return M.sources[M.sources.length - 1];
 }
 
+/**
+ * Una instalacion contada dos veces. El modelo funde las fuentes sumando filas,
+ * asi que si una fila agregada dice «Chrome 125: 243 equipos» y ademas llega el
+ * detalle de esos mismos 243, la version cuenta 486. No se corrige solo: el
+ * detalle puede ser un lote parcial, y descontarlo entonces dejaria la cuenta
+ * corta, que es peor que verla larga. Se avisa y se deja decidir.
+ */
+function detectaSolape() {
+  const agg = new Set(), det = new Set();
+  for (const s of M.sources) {
+    const donde = s.shape === 'agregado' ? agg : s.shape === 'detalle' ? det : null;
+    if (!donde) continue;
+    for (const r of s.rows) donde.add(r.appKey + String.fromCharCode(1) + r.ver);
+  }
+  let n = 0;
+  agg.forEach(k => { if (det.has(k)) n++; });
+  return n;
+}
+
 /** Rehace el modelo a partir de las fuentes que queden. */
 function mergeSources() {
   M.rows = [];
@@ -189,6 +208,7 @@ function mergeSources() {
     if (!M.headers.length || s.shape === 'detalle') { M.headers = s.headers; M.cols = s.cols; }
   }
   M.fileName = M.sources.map(s => s.name).join(' + ');
+  M.solape = detectaSolape();
   recomputeModel();
   return M;
 }

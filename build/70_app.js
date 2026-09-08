@@ -283,8 +283,8 @@ document.addEventListener('click', async e => {
     const k = el.getAttribute('data-scopein');
     const r = CFG.apps[k] || (CFG.apps[k] = { estado: 'permitida', cat: guessCat(k) });
     r.gest = true; r.auto = false;
-    if (!r.rec) { const sp = verSpread((M.effVer.get(k) || new Map()));
-      Object.assign(r, seedThresholds(sp, (M.aggFull.appDev.get(k) || new Set()).size)); }
+    if (!r.rec) { const sp = verSpread(M.effVer.get(k));
+      Object.assign(r, seedThresholds(sp, spreadTotal(sp) || (M.aggFull.appDev.get(k) || new Set()).size)); }
     cfgSave(); toast('Incluida en el estándar de cumplimiento'); render(); return;
   }
   if ((el = cl('[data-filterapp]'))) { toggleFilter('appKey', el.getAttribute('data-filterapp')); return; }
