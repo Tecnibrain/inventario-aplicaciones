@@ -224,6 +224,11 @@ async function getDownloads() {
   catch (e) { return null; }
 }
 async function saveFile(name, data, mime) {
+  // Windows PowerShell 5.1 lee un .ps1 sin BOM como ANSI, no como UTF-8: basta
+  // una tilde en el nombre de una aplicacion para que el script llegue roto.
+  // El BOM le dice que es UTF-8 y deja de adivinar.
+  if (/\.ps1$/i.test(name) && typeof data === 'string' && data.charCodeAt(0) !== 0xFEFF)
+    data = String.fromCharCode(0xFEFF) + data;
   const dl = await getDownloads();
   if (dl) {
     try { await dl.save({ filename: name, data }); toast('Guardado: ' + name); }

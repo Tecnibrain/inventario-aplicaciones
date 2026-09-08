@@ -17,7 +17,10 @@ const TOK_KEY = 'invapp.tok', PKCE_KEY = 'invapp.pkce';
 /* ---- 24.1 generacion de KQL -------------------------------------------- */
 const kqlEsc = s => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 /** Escapa para una cadena de PowerShell entre comillas simples: se duplican. */
-const psEsc = s => String(s).replace(/'/g, "''");
+// Escapa para una cadena de PowerShell entre comillas simples: se duplican.
+// Y fuera los caracteres de control: un salto de linea dentro del nombre de una
+// aplicacion partiria la instruccion en dos y el script no arrancaria.
+const psEsc = s => String(s).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/'/g, "''");
 
 /**
  * Filtro de equipos comun a las tres consultas. Admite varias condiciones, una
@@ -594,7 +597,7 @@ function scriptResumir() {
       las cadenas de JavaScript son UTF-16.
 
       Pero abrirlo entero no hace falta. De ese archivo salen tres cosas mucho
-      mas pequeñas, recorriendolo sin cargarlo en memoria:
+      mas pequenos, recorriendolo sin cargarlo en memoria:
 
       ${reglas.length
         ? `Corte: tu ESTANDAR, ${reglas.length} aplicacion(es). Una instalacion es
@@ -619,7 +622,7 @@ function scriptResumir() {
       Las dos primeras dicen cuantos equipos hay en cada version. La tercera dice
       cuales son, que es lo unico que el catalogo agregado no puede dar y lo que
       hace falta para ir a arreglarlos. Solo lleva lo que va por detras de la
-      version mas alta vista, que es una fraccion pequeña del total.
+      version mas alta vista, que es una fraccion pequena del total.
 
     Uso:
       .\\resumir-detalle.ps1 -Ruta 'C:\\ruta\\salida\\detalle.csv'
@@ -814,7 +817,7 @@ public class Resumidor
         return true;
     }
 
-    // Una sola definicion de «esto va atrasado», para que el catalogo y las
+    // Una sola definicion de "esto va atrasado", para que el catalogo y las
     // excepciones sean complementarios de verdad: lo que no es excepcion va al
     // catalogo, y al reves. Si cada uno lo decidiera por su cuenta, una
     // instalacion podria colarse en los dos o en ninguno.
@@ -945,7 +948,7 @@ public class Resumidor
         if (salidaExc != null)
         {
             // --- pasada 2: QUE equipo va por detras. Es lo unico que el catalogo
-            // agregado no puede dar, y es una fraccion pequeña del archivo.
+            // agregado no puede dar, y es una fraccion pequena del archivo.
             using (StreamReader r = new StreamReader(ruta, Encoding.UTF8, true, 1 << 20))
             using (StreamWriter w = new StreamWriter(salidaExc, false, new UTF8Encoding(true)))
             {
@@ -1100,7 +1103,7 @@ if (-not $Salida) { $Salida = Join-Path (Get-Location) 'salida' }
 if (-not (Test-Path $Salida)) { New-Item -ItemType Directory -Path $Salida | Out-Null }
 
 # Filtro OData del informe. Ojo: no es KQL, y cada informe admite unos campos
-# distintos. Ejemplos:  (OS eq 'Windows')   ·   (ApplicationName eq 'Google Chrome')
+# distintos. Ejemplos:  (OS eq 'Windows')   o   (ApplicationName eq 'Google Chrome')
 $Filtro = '${psEsc((opts.filtro || '').replace(/[\r\n]+/g, ' ').trim())}'
 ${bloqueAuth(modo, 'DeviceManagementManagedDevices.Read.All')}${puente}
 
