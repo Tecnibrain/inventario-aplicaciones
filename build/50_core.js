@@ -88,7 +88,7 @@ const CFG_DEF = {
   v: 1,
   org: '',
   params: { syncDias: 7, umbralOk: 95, umbralWarn: 85, coberturaGestionada: 90, thinPct: 30,
-            alcance: 'gestionadas' },
+            alcance: 'gestionadas', agrupaVersion: true },
   apps: {}, graph: {}, kql: {}
 };
 let CFG = JSON.parse(JSON.stringify(CFG_DEF));

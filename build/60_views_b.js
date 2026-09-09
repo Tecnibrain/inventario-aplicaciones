@@ -383,6 +383,15 @@ function vAdmin(A, rows) {
             <span class="hint">Un equipo corporativo lleva decenas de librerías y controladores. Exigir que todos
             estén en la última versión convierte el indicador en ruido, así que por defecto solo puntúa lo que
             realmente gobiernas.</span></div>
+          <label class="chk" style="margin:14px 0 4px">
+            <input type="checkbox" data-cfg="params.agrupaVersion"${CFG.params.agrupaVersion !== false ? ' checked' : ''}>
+            Agrupar las versiones que vienen dentro del nombre
+          </label>
+          <span class="hint">Muchos inventarios repiten la versión en el nombre
+            (<code>desktop_runtime_-_8.0.30_(x86)</code>), y entonces cada versión llega como una
+            aplicación distinta que cumple consigo misma. Con esto se agrupan por el nombre limpio y
+            se usa la versión de su columna. <b>Desactivarlo hace que el cumplimiento parezca mejor
+            de lo que es.</b></span>
           <div class="fld"><label for="cfgGest">Cobertura para proponer «administrada» (%)</label>
             <input id="cfgGest" data-cfg="params.coberturaGestionada" type="number" min="1" max="100" value="${P.coberturaGestionada}">
             <span class="hint">Una aplicación presente en al menos este porcentaje del parque se propone como administrada.</span></div>

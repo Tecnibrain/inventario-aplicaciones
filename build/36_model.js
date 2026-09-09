@@ -136,13 +136,17 @@ function addSource(grid, fileName, sheet, reset) {
       const n = parseFloat(String(g(r, 'count')).replace(/[^\d.,-]/g, '').replace(',', '.'));
       w = isFinite(n) && n > 0 ? Math.round(n) : 1;
     }
+    // El nombre tal cual se conserva: agrupar no es perder.
+    const appRaw = app;
+    const appGrp = CFG.params.agrupaVersion === false ? app : baseApp(app);
     const cpeRaw = String(g(r, 'cpe')).trim();
     const eos = String(g(r, 'eos')).trim();
     const o = {
       device, w,
       user:    device ? '' : '',
       vendor:  vendor || '(sin fabricante)',
-      app:     app || '(sin nombre)',
+      app:     appGrp || app || '(sin nombre)',
+      appRaw:  appRaw || '(sin nombre)',
       ver:     String(g(r, 'ver')).trim() || '(sin versión)',
       cpeRaw,
       cpe:     !!cpeRaw && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(cpeRaw),

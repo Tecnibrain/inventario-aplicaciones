@@ -460,6 +460,21 @@ function vApp(A, rows, key) {
       <span class="sem warn">${fmt(o.warn)} requieren atención</span>
       <span class="sem bad">${fmt(o.bad)} no cumplen</span></div></div>` : ''}
     </div>` +
+    (() => {
+      // Si el nombre traia la version dentro, aqui hubo varias entradas que se
+      // han juntado. Conviene decirlo: cambia los numeros respecto a la consola.
+      const raws = (A.appRaws.get(key) || new Set());
+      if (raws.size < 2) return '';
+      const lista = Array.from(raws).sort();
+      return `<div class="banner" style="margin:16px 0 0">${ico('info')}<div>
+        <b>Aquí se han unido ${fmt(lista.size || lista.length)} entradas del inventario.</b>
+        Traían la versión dentro del nombre, así que llegaban como aplicaciones distintas
+        —y cada una parecía cumplir consigo misma—. La versión buena viene en su columna, así que
+        del nombre sobra. Puedes desactivarlo en Administración.
+        <div class="mono mini" style="margin-top:9px;max-height:118px;overflow:auto;line-height:1.65">
+          ${lista.map(x => esc(x)).join('<br>')}</div>
+      </div></div>`;
+    })() +
     sec('Distribución de versiones', 'Qué versión predomina y cuántos equipos siguen atrás') +
     `<div class="gwide">` +
       card({ title:'Equipos por versión', sub:`La versión aprobada es <b class="mono">${esc(r.rec || '—')}</b>; pulsa una barra para aislar esa versión`,

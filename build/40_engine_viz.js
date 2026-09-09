@@ -21,7 +21,7 @@ function aggregate(rows) {
   const A = {
     n: rows.length,
     devSet: new CSet(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
-    appMeta: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
+    appMeta: new Map(), appRaws: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
     appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
     dayDev: new Map(), bucketDev: new Map(), devApps: new Map(), devLast: new Map(),
     cpeYes: 0, cpeNo: 0, eosRows: 0, vendorRows: new Map(), userSet: new Set()
@@ -34,6 +34,11 @@ function aggregate(rows) {
     addTo(A.appDev, r.appKey, r.device, w);
     addTo(A.appVers, r.appKey, r.ver);
     if (!A.appMeta.has(r.appKey)) A.appMeta.set(r.appKey, { vendor: r.vendor, app: r.app });
+    // los nombres tal y como venian, para poder enseñar que se ha agrupado
+    if (r.appRaw && r.appRaw !== r.app) {
+      let s = A.appRaws.get(r.appKey); if (!s) A.appRaws.set(r.appKey, s = new Set());
+      s.add(r.appRaw);
+    }
     if (r.device) addTo(A.devApps, r.device, r.appKey);
     addTo(A.osDev, r.osver, r.device, w);
     if (r.geo) addTo(A.geoDev, r.geo, r.device, w);
