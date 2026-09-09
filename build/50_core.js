@@ -37,6 +37,10 @@ function toggleFilter(dim, value) {
 function clearFilters() { S.f = {}; S.q = ''; const q = $('#qGlobal'); if (q) q.value = ''; S.limit = {}; render(); }
 const activeDims = () => Object.keys(S.f);
 
+/* Dos contadores para saber si hace falta recalcular. Van sueltos y no dentro
+   de M ni de CFG, que se serializan: un contador no tiene por que persistir. */
+let MODELO_V = 0, REGLAS_V = 0;
+
 function filterRows(exceptDim) {
   const dims = activeDims().filter(d => d !== exceptDim);
   const q = S.q.trim().toLowerCase();
@@ -103,6 +107,7 @@ function cfgLoad() {
   } catch (e) { /* almacenamiento bloqueado: se sigue en memoria */ }
 }
 function cfgSave() {
+  REGLAS_V++;                       // las reglas mandan sobre el cumplimiento
   try { localStorage.setItem(CFG_KEY, JSON.stringify(CFG)); return true; }
   catch (e) { return false; }
 }
@@ -261,33 +266,36 @@ const worse = (a, b) => {
  */
 function computeCompliance(rows) {
   CMP.rowState = new Map(); CMP.dev = new Map(); CMP.app = new Map(); CMP.stale = new Set();
-  const best = new Map();                        // device|app -> version mas alta
+  // Mapa anidado, no una clave de texto. Antes se construia una clave
+  // «equipo + separador + appKey» por fila y luego se partia para recuperar las
+  // dos mitades: con 280.000 filas es casi un millon de cadenas para nada.
+  const best = new Map();                        // equipo -> Map(appKey -> version mas alta)
+  const aggApp = new Map();                      // sin equipo: se pesan por recuento
+  // Las dos condiciones son excluyentes, asi que una sola pasada basta.
   for (const r of rows) {
-    if (!r.device) continue;                     // fila agregada: no hay equipo al que atribuirla
-    const id = r.device + ' ' + r.appKey;
-    const p = best.get(id);
-    if (!p || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) best.set(id, r.ver);
+    if (!r.device) {
+      let a = aggApp.get(r.appKey);
+      if (!a) aggApp.set(r.appKey, a = { ok: 0, warn: 0, bad: 0, na: 0 });
+      a[evalVer(r.appKey, r.ver)] += (r.w || 1);
+      continue;
+    }
+    let m = best.get(r.device);
+    if (!m) best.set(r.device, m = new Map());
+    const p = m.get(r.appKey);
+    if (p === undefined || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) m.set(r.appKey, r.ver);
   }
-  // filas agregadas: no hay equipo al que atribuir, se pesan por recuento
-  const aggApp = new Map();
-  for (const r of rows) {
-    if (r.device) continue;
-    let a = aggApp.get(r.appKey);
-    if (!a) aggApp.set(r.appKey, a = { ok: 0, warn: 0, bad: 0, na: 0 });
-    a[evalVer(r.appKey, r.ver)] += (r.w || 1);
-  }
-  const pairApp = new Map();                     // appKey -> Map(device -> estado)
-  best.forEach((ver, id) => {
-    const i = id.indexOf(' ');
-    const dev = id.slice(0, i), k = id.slice(i + 1);
-    const st = evalVer(k, ver);
+  const pairApp = new Map();                     // appKey -> Map(equipo -> estado)
+  best.forEach((m, dev) => {
     let dm = CMP.dev.get(dev);
     if (!dm) CMP.dev.set(dev, dm = { ok: 0, warn: 0, bad: 0, na: 0, noAuth: [], bad_: [], warn_: [], last: null });
-    dm[st]++;
-    if (st === 'bad') { const r = rule(k); (r && r.estado === 'no-permitida' ? dm.noAuth : dm.bad_).push(k); }
-    else if (st === 'warn') dm.warn_.push(k);
-    let am = pairApp.get(k); if (!am) pairApp.set(k, am = new Map());
-    am.set(dev, st);
+    m.forEach((ver, k) => {
+      const st = evalVer(k, ver);
+      dm[st]++;
+      if (st === 'bad') { const r = rule(k); (r && r.estado === 'no-permitida' ? dm.noAuth : dm.bad_).push(k); }
+      else if (st === 'warn') dm.warn_.push(k);
+      let am = pairApp.get(k); if (!am) pairApp.set(k, am = new Map());
+      am.set(dev, st);
+    });
   });
   // estado por fila, para poder filtrar por cumplimiento
   for (const r of rows) {

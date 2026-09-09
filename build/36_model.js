@@ -209,6 +209,7 @@ function mergeSources() {
   }
   M.fileName = M.sources.map(s => s.name).join(' + ');
   M.solape = detectaSolape();
+  MODELO_V++;
   recomputeModel();
   return M;
 }
