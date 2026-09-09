@@ -565,6 +565,12 @@ async function gxAction(a) {
     } catch (e) { toast(e.message); }
     return;
   }
+  if (a === 'hp') {
+    const correo = (($('#hpMail') || {}).value || '').trim();
+    if (!correo) { toast('Pon antes tu correo corporativo'); return; }
+    const region = ($('#hpRegion') || {}).value || 'us';
+    return saveFile('extraer-hp.ps1', scriptHP(correo, region), 'text/plain;charset=utf-8');
+  }
   if (a === 'resumir') {
     return saveFile('resumir-detalle.ps1', scriptResumir(), 'text/plain;charset=utf-8');
   }

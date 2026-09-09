@@ -5026,6 +5026,233 @@ Write-Host 'Arrastralos TODOS a la vez sobre el tablero: se funden en un solo mo
 ${modo === 'microsoft' ? 'Disconnect-MgGraph | Out-Null\n' : ''}`;
 }
 
+/* ---- 24.5d extraccion desde HP Workforce Experience ----------------------
+   La pasarela de HP filtra por Origin: la misma llamada responde 200 desde su
+   propio portal y 403 desde cualquier otro sitio, asi que la pagina no puede
+   hablar con ella. Un script no manda Origin y pasa sin problema, de ahi que
+   esto sea un .ps1.
+
+   A cambio, aqui no hay client secret, ni tramite, ni tope de filas: la sesion
+   es del usuario, el refresh token no caduca y WXPQL pagina con limit/skip.
+   ------------------------------------------------------------------------ */
+const HP_REGIONES = { us: 'https://api.workforceexperience.hp.com',
+                      eu: 'https://eu-api.workforceexperience.hp.com',
+                      au: 'https://au-api.workforceexperience.hp.com' };
+
+function scriptHP(correo, region) {
+  const base = HP_REGIONES[region] || HP_REGIONES.us;
+  return `<#
+    Inventario de Aplicaciones - extraccion desde HP Workforce Experience
+    Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
+
+    Por que un script y no un boton en la pagina:
+      La pasarela de HP filtra por cabecera Origin. Comprobado: la misma llamada
+      responde 200 desde el portal de HP y 403 desde cualquier otro origen. Un
+      navegador siempre manda Origin; un script no, y por eso este si pasa.
+
+    Lo bueno de este camino:
+      - No hay client secret ni tramite: entras con tu cuenta.
+      - El refresh token no caduca, asi que solo la PRIMERA vez hay que hacer un
+        paso a mano. Despues se guarda cifrado y las siguientes van solas.
+      - WXPQL pagina con limit/skip: no hay tope de exportacion. Es lo que
+        resuelve el corte de 135.000 filas de la consola.
+
+    Uso:
+      .\\extraer-hp.ps1                 la primera vez, te guia
+      .\\extraer-hp.ps1                 las siguientes, ya va sola
+      .\\extraer-hp.ps1 -Reiniciar      si quieres volver a iniciar sesion
+#>
+
+param(
+    [string]$Correo = '${psEsc(correo || '')}',
+    [string]$Base   = '${base}',
+    [int]$Pagina    = 500,
+    [switch]$Reiniciar
+)
+
+$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$Salida = Join-Path $PSScriptRoot 'salida'
+if (-not $Salida) { $Salida = Join-Path (Get-Location) 'salida' }
+if (-not (Test-Path $Salida)) { New-Item -ItemType Directory -Path $Salida | Out-Null }
+
+# El refresh token vive aqui, cifrado con DPAPI: solo lo puede leer este usuario
+# en esta maquina. Ni el repositorio ni el tablero lo ven nunca.
+$Guardado = Join-Path $PSScriptRoot '.hp-token'
+$TOKEN_URL = 'https://workforceexperience.hp.com/services/oauth_handler/onecloud/v2/token'
+$REDIRECT  = 'https://developers.workforceexperience.hp.com/authtest'
+
+function Guardar-Refresh {
+    param([string]$Valor)
+    ConvertTo-SecureString $Valor -AsPlainText -Force |
+        ConvertFrom-SecureString | Set-Content -Path $Guardado -Encoding ASCII
+}
+
+function Leer-Refresh {
+    if (-not (Test-Path $Guardado)) { return $null }
+    try {
+        $seg = (Get-Content $Guardado -Raw).Trim() | ConvertTo-SecureString
+        $b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($seg)
+        try { return [Runtime.InteropServices.Marshal]::PtrToStringAuto($b) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }
+    } catch { return $null }
+}
+
+function Pedir-Token {
+    param([hashtable]$Cuerpo)
+    Invoke-RestMethod -Method POST -Uri $TOKEN_URL -ContentType 'application/json' \`
+        -Body ($Cuerpo | ConvertTo-Json -Compress)
+}
+
+# ---------------------------------------------------------------- sesion
+if ($Reiniciar -and (Test-Path $Guardado)) { Remove-Item $Guardado -Force }
+$refresh = Leer-Refresh
+$tok = $null
+
+if ($refresh) {
+    Write-Host 'Renovando la sesion guardada...' -ForegroundColor Cyan
+    try { $tok = Pedir-Token @{ grant_type = 'refresh_token'; refresh_token = $refresh } }
+    catch { Write-Host '   la sesion guardada ya no vale; hay que entrar otra vez' -ForegroundColor Yellow }
+}
+
+if (-not $tok) {
+    if (-not $Correo) { $Correo = Read-Host 'Tu correo corporativo (el de Workforce Experience)' }
+
+    Write-Host 'Buscando tu proveedor de identidad...' -ForegroundColor Cyan
+    $idp = Invoke-RestMethod -Uri ("{0}/v1/identity/idpLookup?email={1}" -f $Base, [Uri]::EscapeDataString($Correo))
+    $href = $idp[0].links[0].href
+    if (-not $href) { throw 'HP no devolvio un proveedor de identidad para ese correo.' }
+
+    $auth = 'https://workforceexperience.hp.com/services/oauth_handler/onecloud/auth?providerHref={0}&login_hint={1}&redirect_uri={2}' -f \`
+            [Uri]::EscapeDataString($href), [Uri]::EscapeDataString($Correo), [Uri]::EscapeDataString($REDIRECT)
+
+    Write-Host ''
+    Write-Host '  ------------------------------------------------------------'
+    Write-Host '  Se abrira el navegador. Inicia sesion.' -ForegroundColor Yellow
+    Write-Host '  Al terminar acabaras en una pagina en blanco: copia la URL'   -ForegroundColor Yellow
+    Write-Host '  ENTERA de la barra de direcciones y pegala aqui.'             -ForegroundColor Yellow
+    Write-Host '  ------------------------------------------------------------'
+    Write-Host ''
+    try { Start-Process $auth } catch { Write-Host ("Abrela a mano: {0}" -f $auth) }
+
+    $url = Read-Host 'Pega aqui la URL completa'
+    if ($url -notmatch 'code=([^&]+)') { throw 'En esa URL no viene ningun code. Copiala entera, con todo lo que va detras del ?' }
+    $code = [Uri]::UnescapeDataString($Matches[1])
+    if ($url -notmatch 'state=([^&]+)') { throw 'En esa URL no viene ningun state.' }
+    $state = [Uri]::UnescapeDataString($Matches[1])
+
+    $tok = Pedir-Token @{ grant_type = 'authorization_code'; code = $code; state = $state; redirect_uri = $REDIRECT }
+}
+
+if (-not $tok.access_token) { throw 'No se pudo obtener el token.' }
+if ($tok.refresh_token) { Guardar-Refresh $tok.refresh_token }
+$script:Acceso = $tok.access_token
+$script:Caduca = (Get-Date).AddSeconds([int]($tok.expires_in) - 60)
+Write-Host 'Sesion lista.' -ForegroundColor Green
+
+function Token-Vigente {
+    # El acceso dura 15 minutos y una descarga larga los pasa de sobra.
+    if ((Get-Date) -lt $script:Caduca) { return $script:Acceso }
+    $r = Leer-Refresh
+    if (-not $r) { throw 'La sesion caduco y no hay refresh guardado. Vuelve a ejecutar con -Reiniciar.' }
+    $n = Pedir-Token @{ grant_type = 'refresh_token'; refresh_token = $r }
+    if ($n.refresh_token) { Guardar-Refresh $n.refresh_token }
+    $script:Acceso = $n.access_token
+    $script:Caduca = (Get-Date).AddSeconds([int]($n.expires_in) - 60)
+    return $script:Acceso
+}
+
+function Consultar {
+    param([string]$Wxpql)
+    $r = Invoke-RestMethod -Method POST -Uri ("{0}/v1/insights/query" -f $Base) \`
+        -Headers @{ Authorization = ('Bearer ' + (Token-Vigente)) } \`
+        -ContentType 'application/json' -Body (@{ query = $Wxpql } | ConvertTo-Json -Compress)
+    if ($r.data)    { return $r.data }
+    if ($r.records) { return $r.records }
+    if ($r.results) { return $r.results }
+    if ($r.rows)    { return $r.rows }
+    return $r
+}
+
+# ------------------------------------------------- que tablas hay de verdad
+Write-Host ''
+Write-Host 'Tablas a las que tienes acceso:' -ForegroundColor Cyan
+$tablas = @()
+try {
+    $t = Invoke-RestMethod -Uri ("{0}/v1/insights/tables" -f $Base) \`
+         -Headers @{ Authorization = ('Bearer ' + (Token-Vigente)) }
+    $tablas = @($t.tables | ForEach-Object { $_.tableName })
+    $tablas | Sort-Object | ForEach-Object { Write-Host ("   {0}" -f $_) -ForegroundColor DarkGray }
+} catch { Write-Host ('   no se pudo listar: ' + $_.Exception.Message) -ForegroundColor Yellow }
+
+function Hay { param([string]$N) return ($tablas -contains $N) }
+
+function Exportar {
+    param([string]$Nombre, [string]$Titulo, [string]$Consulta)
+    Write-Host ("-> {0}" -f $Titulo) -ForegroundColor Cyan
+    $todo = New-Object System.Collections.ArrayList
+    $skip = 0
+    while ($true) {
+        $q = "{0} | limit {1} skip {2}" -f $Consulta, $Pagina, $skip
+        try { $filas = @(Consultar $q) }
+        catch {
+            $msg = $_.Exception.Message
+            try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).message } catch { }
+            Write-Host ("   ERROR: {0}" -f $msg) -ForegroundColor Red
+            return
+        }
+        if (-not $filas -or $filas.Count -eq 0) { break }
+        foreach ($f in $filas) { [void]$todo.Add([PSCustomObject]$f) }
+        Write-Host ("   {0:n0} filas..." -f $todo.Count)
+        if ($filas.Count -lt $Pagina) { break }
+        $skip += $Pagina
+        Start-Sleep -Milliseconds 250     # la API tiene limite de peticiones
+    }
+    Write-Host ''
+    if ($todo.Count -eq 0) { Write-Host '   sin filas' -ForegroundColor DarkYellow; return }
+    $ruta = Join-Path $Salida ("{0}.csv" -f $Nombre)
+    $todo | Export-Csv -Path $ruta -NoTypeInformation -Encoding UTF8
+    Write-Host ("   {0:n0} filas -> {1}" -f $todo.Count, (Split-Path $ruta -Leaf)) -ForegroundColor Green
+}
+
+Write-Host ''
+
+# Catalogo agregado: una fila por aplicacion y version, con cuantos equipos.
+# Es lo que le faltaba al export de la consola, que solo daba la version mas alta.
+if (Hay 'SoftwareUtilizationSummary') {
+    Exportar -Nombre 'hp_catalogo' -Titulo 'Catalogo agregado' -Consulta \`
+        'SoftwareUtilizationSummary | project appName, appVersion, deviceCount, deviceOS'
+}
+
+# Detalle por equipo. Si existe una tabla de inventario propiamente dicha se usa
+# esa, porque las de utilizacion solo ven lo que se ha ABIERTO, no lo instalado.
+if (Hay 'SoftwareInventory') {
+    Exportar -Nombre 'hp_detalle' -Titulo 'Detalle por equipo (inventario)' -Consulta \`
+        'SoftwareInventory | project deviceName, deviceSn, appName, appVersion, deviceOS, lastSignedInUser'
+} elseif (Hay 'DeviceSoftwareUtilization') {
+    Write-Host 'AVISO: no hay tabla de inventario; se usa la de utilizacion.' -ForegroundColor Yellow
+    Write-Host '       Eso ve lo que se ha usado, no necesariamente todo lo instalado.' -ForegroundColor Yellow
+    Exportar -Nombre 'hp_detalle' -Titulo 'Detalle por equipo (utilizacion)' -Consulta \`
+        'DeviceSoftwareUtilization | project deviceName, deviceSn, appName, appVersion, deviceOS, month'
+}
+
+# Parque: un registro por equipo.
+if (Hay 'DeviceDEXScore') {
+    Exportar -Nombre 'hp_parque' -Titulo 'Parque de equipos' -Consulta \`
+        'DeviceDEXScore | project deviceName, deviceSn, deviceModel, deviceOS, OSVersion, lastSignedInUser'
+} elseif (Hay 'NonReportingDevices') {
+    Exportar -Nombre 'hp_parque' -Titulo 'Parque de equipos' -Consulta \`
+        'NonReportingDevices | project deviceName, deviceSn, deviceType, deviceMfg, lastSeen, dateEnrolled'
+}
+
+Write-Host ''
+Write-Host ("Listo. Archivos en: {0}" -f $Salida) -ForegroundColor Cyan
+Write-Host 'Arrastralos TODOS a la vez sobre el tablero: se funden en un solo modelo.' -ForegroundColor Cyan
+Write-Host 'La proxima vez no hara falta iniciar sesion: la sesion queda guardada cifrada.' -ForegroundColor DarkGray
+`;
+}
+
 /* ---- 24.5 script de PowerShell -----------------------------------------
    Camino sin registrar ninguna aplicacion: el modulo oficial de Microsoft ya
    trae su propio registro multi-tenant, asi que el usuario solo inicia sesion.
@@ -5334,6 +5561,56 @@ function vDatos(A, rows) {
           para Microsoft Graph PowerShell. El propio diálogo de inicio de sesión ofrece el botón.
           No es un registro de aplicación: es aprobar una que ya existe.
         </div></div>
+      </div>
+    </div>` +
+    sec('HP Workforce Experience', 'Tu cuenta, sin secreto y sin tope de filas: es el camino con menos trámite de los tres') +
+    `<div class="adm-grid">
+      <div class="card"><div class="card-h"><div><h3>Script de extracción</h3>
+        <p>Inicias sesión una vez; a partir de ahí va solo</p></div></div>
+        <div style="margin-top:14px">
+          <div class="fld"><label for="hpMail">Tu correo corporativo</label>
+            <input id="hpMail" data-cfg="hp.correo" value="${esc((CFG.hp || {}).correo || '')}"
+                   placeholder="nombre@empresa.com" spellcheck="false">
+            <span class="hint">El que usas en Workforce Experience, no el personal.</span></div>
+          <div class="fld"><label for="hpRegion">Región de tu tenant</label>
+            <select id="hpRegion" data-cfg="hp.region">
+              <option value="us"${((CFG.hp || {}).region || 'us') === 'us' ? ' selected' : ''}>Estados Unidos</option>
+              <option value="eu"${(CFG.hp || {}).region === 'eu' ? ' selected' : ''}>Europa</option>
+              <option value="au"${(CFG.hp || {}).region === 'au' ? ' selected' : ''}>Australia</option>
+            </select></div>
+          <button class="btn btn-p" data-gx="hp">Descargar extraer-hp.ps1</button>
+          <p class="mini" style="margin-top:12px">Al ejecutarlo te abre el navegador, inicias sesión y pegas
+            la URL a la que te lleva. Eso es <b>todo</b>, y solo la primera vez: la sesión queda guardada
+            cifrada en tu equipo y las siguientes ejecuciones no preguntan nada.</p>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><div><h3>Por qué esto es un script y no un botón</h3>
+        <p>Lo comprobé antes de escribirlo</p></div></div>
+        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
+          <p style="margin:0 0 10px">La pasarela de HP filtra por cabecera <code>Origin</code>. La misma
+            llamada responde <b>200</b> desde el portal de HP y <b>403</b> desde cualquier otro sitio.
+            Un navegador siempre manda <code>Origin</code>; un script no, y por eso sí pasa.</p>
+          <p style="margin:0 0 10px">No es una limitación del tablero: <b>ninguna</b> página web podría
+            hablar con esa API.</p>
+          <div class="banner" style="margin:0">${ico('shield')}<div>
+            El <i>refresh token</i> se guarda cifrado con DPAPI, junto al script: solo lo puede leer tu
+            usuario en tu equipo. No pasa por esta página ni por el repositorio.
+          </div></div>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><div><h3>Qué trae, y qué hay que mirar</h3>
+        <p>El script te lista tus tablas al arrancar</p></div></div>
+        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
+          <p style="margin:0 0 10px"><b>Sin tope de filas.</b> El lenguaje de consulta pagina con
+            <code>limit</code> y <code>skip</code>, así que el script recorre todo. Es lo que resuelve el
+            corte de 135.000 filas del export de la consola, que solo cubría 1.332 de 25.875 equipos.</p>
+          <p style="margin:0 0 10px">Saca <b>catálogo agregado con desglose por versión</b> —lo que al
+            Excel le faltaba—, <b>detalle por equipo</b> y <b>parque</b>.</p>
+          <p style="margin:0">Lo que hay que comprobar: si entre tus tablas aparece
+            <code>SoftwareInventory</code>, tienes lo instalado. Si solo están las de
+            <code>...Utilization</code>, eso mide lo que se ha <b>usado</b>, que no es lo mismo.
+            El script lo detecta, escoge la mejor y te avisa.</p>
+        </div>
       </div>
     </div>` +
     sec('Intune', 'El camino sin tope de filas: los informes se entregan como archivo, no como respuesta') +
@@ -6029,6 +6306,12 @@ async function gxAction(a) {
       render();
     } catch (e) { toast(e.message); }
     return;
+  }
+  if (a === 'hp') {
+    const correo = (($('#hpMail') || {}).value || '').trim();
+    if (!correo) { toast('Pon antes tu correo corporativo'); return; }
+    const region = ($('#hpRegion') || {}).value || 'us';
+    return saveFile('extraer-hp.ps1', scriptHP(correo, region), 'text/plain;charset=utf-8');
   }
   if (a === 'resumir') {
     return saveFile('resumir-detalle.ps1', scriptResumir(), 'text/plain;charset=utf-8');

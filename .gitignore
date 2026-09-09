@@ -29,3 +29,8 @@ desktop.ini
 .vscode/
 .idea/
 _tmp*
+
+# El refresh token de HP, cifrado con DPAPI. Solo lo puede leer el usuario que
+# lo genero, pero no tiene por que estar aqui de ninguna forma.
+.hp-token
+*.ps1
