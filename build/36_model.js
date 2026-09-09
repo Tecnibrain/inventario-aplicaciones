@@ -139,15 +139,25 @@ function addSource(grid, fileName, sheet, reset) {
     // El nombre tal cual se conserva: agrupar no es perder.
     const appRaw = app;
     const appGrp = CFG.params.agrupaVersion === false ? app : baseApp(app);
+    // Una fila que resume una aplicacion entera trae cuantas versiones conviven.
+    // Si son varias, la version de la fila es solo la mas alta y no representa a
+    // los equipos que cuenta: darla por buena para todos inflaria el
+    // cumplimiento justo hacia el lado que nadie revisa. Se cuenta la
+    // instalacion y se deja la version en desconocida.
+    const nVer = cols.nver == null ? 0
+      : parseInt(String(g(r, 'nver')).replace(/[^\d]/g, ''), 10) || 0;
+    const verFila = String(g(r, 'ver')).trim();
+    const verUsable = nVer > 1 ? '' : verFila;
     const cpeRaw = String(g(r, 'cpe')).trim();
     const eos = String(g(r, 'eos')).trim();
     const o = {
       device, w,
       user:    device ? '' : '',
-      vendor:  vendor || '(sin fabricante)',
+      vendor:  (!vendor || VEN_UNK.test(vendor)) ? '(sin fabricante)' : vendor,
       app:     appGrp || app || '(sin nombre)',
       appRaw:  appRaw || '(sin nombre)',
-      ver:     String(g(r, 'ver')).trim() || '(sin versión)',
+      ver:     verUsable || '(sin versión)',
+      nVer,
       cpeRaw,
       cpe:     !!cpeRaw && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(cpeRaw),
       os:      String(g(r, 'os')).trim(),
@@ -156,7 +166,7 @@ function addSource(grid, fileName, sheet, reset) {
       cliente: String(g(r, 'cliente')).trim(),
       area:    String(g(r, 'area')).trim(),
       eos, eosBad: /^(eos|endofsupport|fuera|expired|caducad|sin soporte|true|si|yes)/i.test(eos),
-      aprob:   String(g(r, 'approved')).trim(),
+      aprob:   String(g(r, 'approved')).trim() || (nVer > 1 ? verFila : ''),
       ts, day: dayKey(ts), _raw: r
     };
     o.appKey = o.vendor + ' / ' + o.app;
@@ -193,6 +203,40 @@ function detectaSolape() {
   return n;
 }
 
+/**
+ * Rellena el fabricante que falte usando el que si se conoce del mismo nombre.
+ *
+ * Una fuente puede traer el editor y otra no -el export de HP lo pone en la hoja
+ * de catalogo y no en la de detalle- y entonces el mismo producto sale dos
+ * veces, una con fabricante y otra sin el. Como la clave de aplicacion lleva el
+ * fabricante dentro, para el modelo son dos aplicaciones distintas.
+ *
+ * Se elige el fabricante con mas peso, no el primero que aparezca: si dos
+ * fuentes discrepan, manda la que cubre mas equipos.
+ */
+function rellenaFabricante() {
+  const conocido = new Map();               // nombre -> Map(fabricante -> peso)
+  for (const r of M.rows) {
+    if (r.vendor === '(sin fabricante)') continue;
+    let m = conocido.get(r.app);
+    if (!m) conocido.set(r.app, m = new Map());
+    m.set(r.vendor, (m.get(r.vendor) || 0) + (r.w || 1));
+  }
+  let n = 0;
+  for (const r of M.rows) {
+    if (r.vendor !== '(sin fabricante)') continue;
+    const m = conocido.get(r.app);
+    if (!m) continue;
+    let mejor = '', peso = -1;
+    m.forEach((w, v) => { if (w > peso) { peso = w; mejor = v; } });
+    if (!mejor) continue;
+    r.vendor = mejor;
+    r.appKey = mejor + ' / ' + r.app;
+    n++;
+  }
+  return n;
+}
+
 /** Rehace el modelo a partir de las fuentes que queden. */
 function mergeSources() {
   M.rows = [];
@@ -212,6 +256,7 @@ function mergeSources() {
     if (!M.headers.length || s.shape === 'detalle') { M.headers = s.headers; M.cols = s.cols; }
   }
   M.fileName = M.sources.map(s => s.name).join(' + ');
+  M.rellenados = rellenaFabricante();
   M.solape = detectaSolape();
   MODELO_V++;
   recomputeModel();

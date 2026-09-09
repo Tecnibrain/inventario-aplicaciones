@@ -262,15 +262,35 @@ async function readXlsx(buf) {
   const sst = parseSharedStrings(await zipRead(zip, 'xl/sharedStrings.xml'));
   const dateXf = parseStyles(await zipRead(zip, 'xl/styles.xml'));
 
-  // Elige la primera hoja con datos
+  // Elige por lo que trae dentro, no por ser la primera. Un export puede abrir
+  // con una portada -HP pone «Report Information», cuatro celdas de metadatos- y
+  // quedarse con esa es quedarse sin datos. Ademas suele haber mas de una hoja
+  // util: catalogo en una, detalle en otra. Se devuelven todas.
+  const candidatas = [];
   for (const sh of sheets) {
     const xml = await zipRead(zip, sh.path);
     if (!xml) continue;
     const rows = parseSheet(xml, sst, dateXf, d1904);
     const useful = rows.filter(r => r && r.some(c => c !== null && c !== undefined && c !== ''));
-    if (useful.length >= 2) return { rows: useful, sheet: sh.name, sheets: sheets.map(s => s.name) };
+    if (useful.length < 2) continue;
+    const cols = detectColumns((useful[0] || []).map(h => String(h == null ? '' : h).trim()));
+    const roles = Object.keys(cols).length;
+    // dos roles y diez filas: deja fuera portadas y resumenes de cinco lineas
+    const sirve = (cols.app != null || cols.device != null) && roles >= 2 && useful.length >= 10;
+    candidatas.push({ rows: useful, sheet: sh.name, sirve, roles, n: useful.length });
   }
-  throw new Error('El archivo no contiene ninguna hoja con datos.');
+  if (!candidatas.length) throw new Error('El archivo no contiene ninguna hoja con datos.');
+
+  const utiles = candidatas.filter(c => c.sirve);
+  if (!utiles.length) {
+    // ninguna se reconoce: se devuelve la mas grande y que el error lo explique
+    candidatas.sort((a, b) => b.n - a.n);
+    return { rows: candidatas[0].rows, sheet: candidatas[0].sheet, sheets: sheets.map(s => s.name), extra: [] };
+  }
+  // la mas completa primero; las demas se cargan detras como fuentes aparte
+  utiles.sort((a, b) => (b.roles - a.roles) || (b.n - a.n));
+  return { rows: utiles[0].rows, sheet: utiles[0].sheet, sheets: sheets.map(s => s.name),
+           extra: utiles.slice(1).map(c => ({ rows: c.rows, sheet: c.sheet })) };
 }
 
 /* ---- 2.5 CSV / TSV ---- */
@@ -351,6 +371,8 @@ function parseDate(v) {
 }
 /** Compara dos cadenas de version troceandolas en bloques numericos y alfabeticos,
  *  para que 1.10.0 quede por encima de 1.9.0 (un localeCompare lo invertiria). */
+/** Un fabricante que en realidad no se conoce. HP escribe «Unknown». */
+const VEN_UNK = /^\(sin fabricante\)$|^(unknown|desconocido|not available|n\/?a|none|null|-)$/i;
 const VER_UNK = /^\(sin versión\)$|^(not available|n\/?a|none|null|-)$/i;
 function verCmp(a, b) {
   const pa = String(a).match(/\d+|[a-zA-Z]+/g) || [], pb = String(b).match(/\d+|[a-zA-Z]+/g) || [];
@@ -409,14 +431,14 @@ function baseApp(nombre) {
    ========================================================================== */
 const ROLES = [
   ['count',  ['equipos','dispositivos','devicecount','devicecounts','numerodispositivos',
-              'numeroequipos','recuento','cantidadequipos','totalequipos',
+              'numeroequipos','recuento','cantidadequipos','totalequipos','nodevices','noofdevices',
               'instalaciones','installs','conteo','cantidad']],
   ['device', ['devicename','device','equipo','nombreequipo','hostname','host','computer','computername',
               'computador','maquina','machine','pc','nombredispositivo','dispositivo','asset','activo','nombrepc']],
   ['user',   ['username','user','usuario','nombreusuario','samaccountname','upn','owner','propietario','empleado']],
   ['domain', ['domainname','domain','dominio','forest','tenant']],
-  ['vendor', ['applicationpublisher','softwarevendor','vendor','fabricante','publisher','editor','proveedor','marca','manufacturer','empresa']],
-  ['app',    ['applicationname','softwarename','software','aplicacion','application','app','producto','product','productname',
+  ['vendor', ['applicationpublisher','softwarevendor','vendor','fabricante','publisher','editor','proveedor','marca','empresa']],
+  ['app',    ['apps','applicationname','softwarename','software','aplicacion','application','app','producto','product','productname',
               'nombreaplicacion','nombresoftware','programa','displayname','nombre']],
   ['osver',  ['osversioninfo','osversion','versionso','versionsistemaoperativo','osbuild','buildnumber','release','edicion']],
   ['ver',    ['applicationversion','softwareversion','version','versionsoftware','versionaplicacion','displayversion','versionapp','build']],
@@ -430,6 +452,8 @@ const ROLES = [
               'razonsocial','compania','grupo']],
   ['area',   ['area','departamento','division','unidad','gerencia','vicepresidencia','equipo_area',
               'businessunit','unidadnegocio','centrocosto','costcenter','ou','departament']],
+  ['nver',   ['totalversionsinstalled','noofversions','numberofversions',
+              'versionesinstaladas','nversiones','totalversions']],
   ['eos',    ['endofsupportstatus','endofsupport','eos','findesoporte','estadosoporte',
               'soportefinalizado','supportstatus']],
   ['approved',['aprobada','versionaprobada','approvedversion','versionobjetivo','targetversion',

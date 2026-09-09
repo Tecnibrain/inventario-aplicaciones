@@ -755,10 +755,20 @@ async function loadFile(file, añadir) {
     const buf = await file.arrayBuffer();
     let grid, sheet = '';
     const u8 = new Uint8Array(buf.slice(0, 4));
-    if (u8[0] === 0x50 && u8[1] === 0x4B) { const r = await readXlsx(buf); grid = r.rows; sheet = r.sheet; }
+    let otras = [];
+    if (u8[0] === 0x50 && u8[1] === 0x4B) {
+      const r = await readXlsx(buf);
+      grid = r.rows; sheet = r.sheet; otras = r.extra || [];
+    }
     else if (u8[0] === 0xD0 && u8[1] === 0xCF) throw new Error('Es un Excel antiguo (.xls). Ábrelo en Excel y guárdalo como .xlsx o .csv.');
     else grid = parseCsv(decodeText(buf));
     const src = addSource(grid, name, sheet, !añadir);
+    // Un libro con varias hojas utiles trae varias formas -catalogo en una,
+    // detalle en otra- y las dos hacen falta.
+    for (const o of otras) {
+      try { addSource(o.rows, name, o.sheet, false); }
+      catch (e) { console.warn('hoja «' + o.sheet + '» descartada: ' + e.message); }
+    }
     M.aggFull = aggregate(M.rows);
     M.effVer = effVersions(M.rows);
     seedCatalog();

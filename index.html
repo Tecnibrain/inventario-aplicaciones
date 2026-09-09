@@ -862,15 +862,35 @@ async function readXlsx(buf) {
   const sst = parseSharedStrings(await zipRead(zip, 'xl/sharedStrings.xml'));
   const dateXf = parseStyles(await zipRead(zip, 'xl/styles.xml'));
 
-  // Elige la primera hoja con datos
+  // Elige por lo que trae dentro, no por ser la primera. Un export puede abrir
+  // con una portada -HP pone «Report Information», cuatro celdas de metadatos- y
+  // quedarse con esa es quedarse sin datos. Ademas suele haber mas de una hoja
+  // util: catalogo en una, detalle en otra. Se devuelven todas.
+  const candidatas = [];
   for (const sh of sheets) {
     const xml = await zipRead(zip, sh.path);
     if (!xml) continue;
     const rows = parseSheet(xml, sst, dateXf, d1904);
     const useful = rows.filter(r => r && r.some(c => c !== null && c !== undefined && c !== ''));
-    if (useful.length >= 2) return { rows: useful, sheet: sh.name, sheets: sheets.map(s => s.name) };
+    if (useful.length < 2) continue;
+    const cols = detectColumns((useful[0] || []).map(h => String(h == null ? '' : h).trim()));
+    const roles = Object.keys(cols).length;
+    // dos roles y diez filas: deja fuera portadas y resumenes de cinco lineas
+    const sirve = (cols.app != null || cols.device != null) && roles >= 2 && useful.length >= 10;
+    candidatas.push({ rows: useful, sheet: sh.name, sirve, roles, n: useful.length });
   }
-  throw new Error('El archivo no contiene ninguna hoja con datos.');
+  if (!candidatas.length) throw new Error('El archivo no contiene ninguna hoja con datos.');
+
+  const utiles = candidatas.filter(c => c.sirve);
+  if (!utiles.length) {
+    // ninguna se reconoce: se devuelve la mas grande y que el error lo explique
+    candidatas.sort((a, b) => b.n - a.n);
+    return { rows: candidatas[0].rows, sheet: candidatas[0].sheet, sheets: sheets.map(s => s.name), extra: [] };
+  }
+  // la mas completa primero; las demas se cargan detras como fuentes aparte
+  utiles.sort((a, b) => (b.roles - a.roles) || (b.n - a.n));
+  return { rows: utiles[0].rows, sheet: utiles[0].sheet, sheets: sheets.map(s => s.name),
+           extra: utiles.slice(1).map(c => ({ rows: c.rows, sheet: c.sheet })) };
 }
 
 /* ---- 2.5 CSV / TSV ---- */
@@ -951,6 +971,8 @@ function parseDate(v) {
 }
 /** Compara dos cadenas de version troceandolas en bloques numericos y alfabeticos,
  *  para que 1.10.0 quede por encima de 1.9.0 (un localeCompare lo invertiria). */
+/** Un fabricante que en realidad no se conoce. HP escribe «Unknown». */
+const VEN_UNK = /^\(sin fabricante\)$|^(unknown|desconocido|not available|n\/?a|none|null|-)$/i;
 const VER_UNK = /^\(sin versión\)$|^(not available|n\/?a|none|null|-)$/i;
 function verCmp(a, b) {
   const pa = String(a).match(/\d+|[a-zA-Z]+/g) || [], pb = String(b).match(/\d+|[a-zA-Z]+/g) || [];
@@ -1009,14 +1031,14 @@ function baseApp(nombre) {
    ========================================================================== */
 const ROLES = [
   ['count',  ['equipos','dispositivos','devicecount','devicecounts','numerodispositivos',
-              'numeroequipos','recuento','cantidadequipos','totalequipos',
+              'numeroequipos','recuento','cantidadequipos','totalequipos','nodevices','noofdevices',
               'instalaciones','installs','conteo','cantidad']],
   ['device', ['devicename','device','equipo','nombreequipo','hostname','host','computer','computername',
               'computador','maquina','machine','pc','nombredispositivo','dispositivo','asset','activo','nombrepc']],
   ['user',   ['username','user','usuario','nombreusuario','samaccountname','upn','owner','propietario','empleado']],
   ['domain', ['domainname','domain','dominio','forest','tenant']],
-  ['vendor', ['applicationpublisher','softwarevendor','vendor','fabricante','publisher','editor','proveedor','marca','manufacturer','empresa']],
-  ['app',    ['applicationname','softwarename','software','aplicacion','application','app','producto','product','productname',
+  ['vendor', ['applicationpublisher','softwarevendor','vendor','fabricante','publisher','editor','proveedor','marca','empresa']],
+  ['app',    ['apps','applicationname','softwarename','software','aplicacion','application','app','producto','product','productname',
               'nombreaplicacion','nombresoftware','programa','displayname','nombre']],
   ['osver',  ['osversioninfo','osversion','versionso','versionsistemaoperativo','osbuild','buildnumber','release','edicion']],
   ['ver',    ['applicationversion','softwareversion','version','versionsoftware','versionaplicacion','displayversion','versionapp','build']],
@@ -1030,6 +1052,8 @@ const ROLES = [
               'razonsocial','compania','grupo']],
   ['area',   ['area','departamento','division','unidad','gerencia','vicepresidencia','equipo_area',
               'businessunit','unidadnegocio','centrocosto','costcenter','ou','departament']],
+  ['nver',   ['totalversionsinstalled','noofversions','numberofversions',
+              'versionesinstaladas','nversiones','totalversions']],
   ['eos',    ['endofsupportstatus','endofsupport','eos','findesoporte','estadosoporte',
               'soportefinalizado','supportstatus']],
   ['approved',['aprobada','versionaprobada','approvedversion','versionobjetivo','targetversion',
@@ -1188,15 +1212,25 @@ function addSource(grid, fileName, sheet, reset) {
     // El nombre tal cual se conserva: agrupar no es perder.
     const appRaw = app;
     const appGrp = CFG.params.agrupaVersion === false ? app : baseApp(app);
+    // Una fila que resume una aplicacion entera trae cuantas versiones conviven.
+    // Si son varias, la version de la fila es solo la mas alta y no representa a
+    // los equipos que cuenta: darla por buena para todos inflaria el
+    // cumplimiento justo hacia el lado que nadie revisa. Se cuenta la
+    // instalacion y se deja la version en desconocida.
+    const nVer = cols.nver == null ? 0
+      : parseInt(String(g(r, 'nver')).replace(/[^\d]/g, ''), 10) || 0;
+    const verFila = String(g(r, 'ver')).trim();
+    const verUsable = nVer > 1 ? '' : verFila;
     const cpeRaw = String(g(r, 'cpe')).trim();
     const eos = String(g(r, 'eos')).trim();
     const o = {
       device, w,
       user:    device ? '' : '',
-      vendor:  vendor || '(sin fabricante)',
+      vendor:  (!vendor || VEN_UNK.test(vendor)) ? '(sin fabricante)' : vendor,
       app:     appGrp || app || '(sin nombre)',
       appRaw:  appRaw || '(sin nombre)',
-      ver:     String(g(r, 'ver')).trim() || '(sin versión)',
+      ver:     verUsable || '(sin versión)',
+      nVer,
       cpeRaw,
       cpe:     !!cpeRaw && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(cpeRaw),
       os:      String(g(r, 'os')).trim(),
@@ -1205,7 +1239,7 @@ function addSource(grid, fileName, sheet, reset) {
       cliente: String(g(r, 'cliente')).trim(),
       area:    String(g(r, 'area')).trim(),
       eos, eosBad: /^(eos|endofsupport|fuera|expired|caducad|sin soporte|true|si|yes)/i.test(eos),
-      aprob:   String(g(r, 'approved')).trim(),
+      aprob:   String(g(r, 'approved')).trim() || (nVer > 1 ? verFila : ''),
       ts, day: dayKey(ts), _raw: r
     };
     o.appKey = o.vendor + ' / ' + o.app;
@@ -1242,6 +1276,40 @@ function detectaSolape() {
   return n;
 }
 
+/**
+ * Rellena el fabricante que falte usando el que si se conoce del mismo nombre.
+ *
+ * Una fuente puede traer el editor y otra no -el export de HP lo pone en la hoja
+ * de catalogo y no en la de detalle- y entonces el mismo producto sale dos
+ * veces, una con fabricante y otra sin el. Como la clave de aplicacion lleva el
+ * fabricante dentro, para el modelo son dos aplicaciones distintas.
+ *
+ * Se elige el fabricante con mas peso, no el primero que aparezca: si dos
+ * fuentes discrepan, manda la que cubre mas equipos.
+ */
+function rellenaFabricante() {
+  const conocido = new Map();               // nombre -> Map(fabricante -> peso)
+  for (const r of M.rows) {
+    if (r.vendor === '(sin fabricante)') continue;
+    let m = conocido.get(r.app);
+    if (!m) conocido.set(r.app, m = new Map());
+    m.set(r.vendor, (m.get(r.vendor) || 0) + (r.w || 1));
+  }
+  let n = 0;
+  for (const r of M.rows) {
+    if (r.vendor !== '(sin fabricante)') continue;
+    const m = conocido.get(r.app);
+    if (!m) continue;
+    let mejor = '', peso = -1;
+    m.forEach((w, v) => { if (w > peso) { peso = w; mejor = v; } });
+    if (!mejor) continue;
+    r.vendor = mejor;
+    r.appKey = mejor + ' / ' + r.app;
+    n++;
+  }
+  return n;
+}
+
 /** Rehace el modelo a partir de las fuentes que queden. */
 function mergeSources() {
   M.rows = [];
@@ -1261,6 +1329,7 @@ function mergeSources() {
     if (!M.headers.length || s.shape === 'detalle') { M.headers = s.headers; M.cols = s.cols; }
   }
   M.fileName = M.sources.map(s => s.name).join(' + ');
+  M.rellenados = rellenaFabricante();
   M.solape = detectaSolape();
   MODELO_V++;
   recomputeModel();
@@ -6151,10 +6220,20 @@ async function loadFile(file, añadir) {
     const buf = await file.arrayBuffer();
     let grid, sheet = '';
     const u8 = new Uint8Array(buf.slice(0, 4));
-    if (u8[0] === 0x50 && u8[1] === 0x4B) { const r = await readXlsx(buf); grid = r.rows; sheet = r.sheet; }
+    let otras = [];
+    if (u8[0] === 0x50 && u8[1] === 0x4B) {
+      const r = await readXlsx(buf);
+      grid = r.rows; sheet = r.sheet; otras = r.extra || [];
+    }
     else if (u8[0] === 0xD0 && u8[1] === 0xCF) throw new Error('Es un Excel antiguo (.xls). Ábrelo en Excel y guárdalo como .xlsx o .csv.');
     else grid = parseCsv(decodeText(buf));
     const src = addSource(grid, name, sheet, !añadir);
+    // Un libro con varias hojas utiles trae varias formas -catalogo en una,
+    // detalle en otra- y las dos hacen falta.
+    for (const o of otras) {
+      try { addSource(o.rows, name, o.sheet, false); }
+      catch (e) { console.warn('hoja «' + o.sheet + '» descartada: ' + e.message); }
+    }
     M.aggFull = aggregate(M.rows);
     M.effVer = effVersions(M.rows);
     seedCatalog();
