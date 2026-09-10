@@ -272,3 +272,191 @@ async function importarGrande(file, opts, onProg) {
            fuera: fuera.length, fueraFilas: fuera.reduce((s, x) => s + x[1], 0),
            fueraApps: fuera.slice(0, 5).map(x => x[0]) };
 }
+
+/* ---------------------------------------------------------------------------
+   Parquet: lo mismo, pero sesenta veces mas pequeno
+   --------------------------------------------------------------------------- */
+
+/** Los primeros y ultimos cuatro bytes de un Parquet son «PAR1». */
+function esParquet(buf) {
+  const u = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+  return u.length === 4 && u[0] === 0x50 && u[1] === 0x41 && u[2] === 0x52 && u[3] === 0x31;
+}
+
+/** El File como origen asincrono que entiende hyparquet: lee solo lo que pide. */
+const bufferDe = file => ({
+  byteLength: file.size,
+  slice: (ini, fin) => file.slice(ini, fin === undefined ? file.size : fin).arrayBuffer()
+});
+
+/**
+ * Importa un .parquet quedandose con lo que el tablero usa.
+ *
+ * Misma idea que con el CSV -dos pasadas, agregando sobre la marcha- pero aqui
+ * cada pasada cuesta muchisimo menos: el archivo es sesenta veces mas pequeno,
+ * viene por columnas y no hay texto que analizar. Y se piden SOLO las columnas
+ * que hacen falta, asi que las que sobran ni se descomprimen.
+ */
+async function importarParquet(file, opts, onProg) {
+  opts = opts || {};
+  const completos = (opts.completo || []).filter(Boolean).map(s => s.toLowerCase());
+  const esCompleto = app => completos.length > 0 &&
+    completos.some(c => app.toLowerCase().indexOf(c) >= 0);
+  const aviso = (frac, filas, fase) => onProg && onProg(frac, filas, fase);
+
+  M.archivo = file;
+  M.completo = completos.slice();
+
+  const origen = bufferDe(file);
+  let meta;
+  try { meta = await HP.parquetMetadataAsync(origen); }
+  catch (e) {
+    throw new Error('No se pudo leer el Parquet: ' + e.message +
+      '. Si lo generaste con otra herramienta, comprueba que use compresión ' +
+      'snappy o ninguna: zstd y brotli no se leen aquí.');
+  }
+  const esquema = HP.parquetSchema(meta);
+  const columnas = (esquema.children || []).map(c => c.element.name);
+
+  const busca = nombres => {
+    const N = columnas.map(norm);
+    for (const nom of nombres) { const i = N.indexOf(norm(nom)); if (i >= 0) return columnas[i]; }
+    for (const nom of nombres) {
+      const k = norm(nom);
+      if (k.length > 3) { const i = N.findIndex(x => x.includes(k)); if (i >= 0) return columnas[i]; }
+    }
+    return null;
+  };
+  const col = {
+    dev: busca(['DeviceName', 'Device', 'Equipo', 'NombreEquipo', 'ManagedDeviceName']),
+    app: busca(['ApplicationName', 'SoftwareName', 'DisplayName', 'Apps', 'Aplicacion']),
+    ven: busca(['ApplicationPublisher', 'SoftwareVendor', 'Publisher', 'Fabricante']),
+    ver: busca(['ApplicationVersion', 'SoftwareVersion', 'Installed Version', 'Version']),
+    usr: busca(['UserName', 'UPN', 'EmailAddress', 'Last Signed-in User', 'Usuario']),
+    os:  busca(['OSDescription', 'Platform', 'OS', 'OSDistribution']),
+    osv: busca(['OSVersion', 'OSVersionInfo']),
+    ts:  busca(['LastContact', 'Timestamp', 'Fecha'])
+  };
+  if (!col.app && !col.dev)
+    throw new Error('El Parquet no trae ninguna columna útil. Columnas: ' +
+      columnas.slice(0, 14).map(c => '«' + truncate(c, 28) + '»').join(' · '));
+
+  const pedir = Array.from(new Set(Object.values(col).filter(Boolean)));
+  const total = Number(meta.num_rows) || 0;
+  const g = (o, c) => c && o[c] != null ? String(o[c]).trim() : '';
+
+  // Se recorre por bloques: hyparquet devuelve filas materializadas, y con
+  // millones de ellas hay que soltarlas segun se cuentan.
+  const BLOQUE = 200000;
+  async function recorrer(cb, base, peso) {
+    let hechas = 0;
+    for (let ini = 0; ini < total; ini += BLOQUE) {
+      const fin = Math.min(total, ini + BLOQUE);
+      await HP.parquetRead({
+        file: origen, columns: pedir, rowStart: ini, rowEnd: fin, rowFormat: 'object',
+        onComplete: filas => { for (const f of filas) cb(f); }
+      });
+      hechas = fin;
+      aviso(base + (hechas / Math.max(1, total)) * peso, hechas, 'Leyendo el Parquet');
+      await new Promise(r => setTimeout(r, 0));
+    }
+    return hechas;
+  }
+
+  /* ---- pasada 1 ---- */
+  const cuenta = new Map(), alta = new Map(), fichas = new Map();
+  const filas = await recorrer(o => {
+    const dev = g(o, col.dev);
+    if (dev && !fichas.has(dev))
+      fichas.set(dev, [dev, g(o, col.usr), g(o, col.os), g(o, col.osv), g(o, col.ts)]);
+    const app = g(o, col.app);
+    if (!app) return;
+    const ven = g(o, col.ven), ver = g(o, col.ver);
+    const k = ven + SEP1 + app + SEP1 + ver;
+    cuenta.set(k, (cuenta.get(k) || 0) + 1);
+    const ka = ven + SEP1 + app;
+    const prev = alta.get(ka);
+    if (prev === undefined || (!VER_UNK.test(ver) && verCmp(ver, prev) > 0)) alta.set(ka, ver);
+  }, 0, 0.5);
+
+  /* ---- estandar, y despues quien va por detras ---- */
+  aviso(0.52, filas, 'Construyendo el modelo');
+  const nombre = truncate(file.name || 'parquet', 22);
+
+  const parque = [['DeviceName', 'UserName', 'OSDistribution', 'OSVersionInfo', 'Timestamp']];
+  fichas.forEach(v => parque.push(v));
+  const todo = [['SoftwareVendor', 'SoftwareName', 'SoftwareVersion', 'Equipos']];
+  cuenta.forEach((n, k) => { const p = k.split(SEP1); todo.push([p[0], p[1], p[2], String(n)]); });
+
+  M.sources = [];
+  if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
+  if (todo.length > 1) addSource(todo, nombre + ' · catálogo', '', false);
+  M.aggFull = aggregate(M.rows);
+  M.effVer = effVersions(M.rows);
+  seedCatalog();
+
+  const tope = new Map();
+  alta.forEach((v, ka) => {
+    const p = ka.split(SEP1);
+    const r = CFG.apps[p[0] + ' / ' + p[1]];
+    tope.set(ka, (r && r.rec) || v || '');
+  });
+  const atrasada = (ven, app, ver) => {
+    if (esCompleto(app)) return true;
+    const t = tope.get(ven + SEP1 + app) || '';
+    return !!(t && !VER_UNK.test(ver) && verCmp(ver, t) < 0);
+  };
+
+  const porApp = new Map();
+  cuenta.forEach((n, k) => {
+    const p = k.split(SEP1);
+    if (!atrasada(p[0], p[1], p[2])) return;
+    const ka = p[0] + SEP1 + p[1];
+    porApp.set(ka, (porApp.get(ka) || 0) + n);
+  });
+  const MAX = opts.maxExcep || 500000;
+  const orden = Array.from(porApp.entries()).sort((a, b) => b[1] - a[1]);
+  const dentro = new Set();
+  let acumulado = 0;
+  const fuera = [];
+  for (const [ka, n] of orden) {
+    if (acumulado + n <= MAX) { dentro.add(ka); acumulado += n; }
+    else fuera.push([ka.split(SEP1)[1], n]);
+  }
+
+  const catalogo = [['SoftwareVendor', 'SoftwareName', 'SoftwareVersion', 'Equipos']];
+  cuenta.forEach((n, k) => {
+    const p = k.split(SEP1);
+    if (dentro.has(p[0] + SEP1 + p[1]) && atrasada(p[0], p[1], p[2])) return;
+    catalogo.push([p[0], p[1], p[2], String(n)]);
+  });
+
+  /* ---- pasada 2 ---- */
+  const excep = [['DeviceName', 'UserName', 'SoftwareVendor', 'SoftwareName',
+                  'SoftwareVersion', 'Aprobada', 'OSVersionInfo']];
+  await recorrer(o => {
+    const dev = g(o, col.dev), app = g(o, col.app);
+    if (!dev || !app) return;
+    const ven = g(o, col.ven);
+    if (!dentro.has(ven + SEP1 + app)) return;
+    const ver = g(o, col.ver);
+    if (!atrasada(ven, app, ver)) return;
+    excep.push([dev, g(o, col.usr), ven, app, ver, tope.get(ven + SEP1 + app) || '', g(o, col.osv)]);
+  }, 0.52, 0.46);
+
+  M.sources = [];
+  if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
+  if (catalogo.length > 1) addSource(catalogo, nombre + ' · catálogo', '', false);
+  if (excep.length > 1) addSource(excep, nombre + ' · atrasados', '', false);
+
+  M.aggFull = aggregate(M.rows);
+  M.effVer = effVersions(M.rows);
+  seedCatalog();
+  histSnapshot();
+  aviso(1, filas, 'Listo');
+
+  return { filas, equipos: fichas.size, versiones: cuenta.size,
+           atrasados: excep.length - 1,
+           fuera: fuera.length, fueraFilas: fuera.reduce((s, x) => s + x[1], 0),
+           fueraApps: fuera.slice(0, 5).map(x => x[0]) };
+}

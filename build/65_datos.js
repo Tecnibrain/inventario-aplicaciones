@@ -585,7 +585,9 @@ function scriptDuck() {
       1. Convierte el CSV del detalle a Parquet. Medido: 414 MB -> 5,3 MB, y
          tarda segundos. Parquet guarda por columnas y con diccionario, y este
          dato son nombres repetidos millones de veces, asi que se comprime
-         muchisimo.
+         muchisimo. Se comprime con snappy, no con zstd: es lo que el tablero
+         sabe leer al arrastrarlo, y la diferencia de tamano es minima
+         (6,8 MB contra 5,4).
       2. Saca de ahi, con SQL, las tres formas que el tablero funde:
             parque.csv       un registro por equipo
             catalogo.csv     aplicacion + version + cuantos equipos
@@ -687,7 +689,7 @@ $sql = @"
 SET preserve_insertion_order = false;
 
 COPY (SELECT * FROM read_csv_auto('$(Ruta $Ruta)', SAMPLE_SIZE=-1, ignore_errors=true))
-  TO '$(Ruta $Parquet)' (FORMAT parquet, COMPRESSION zstd);
+  TO '$(Ruta $Parquet)' (FORMAT parquet, COMPRESSION snappy);
 
 CREATE OR REPLACE MACRO vkey(v) AS
   lpad(regexp_replace(split_part(coalesce(v,''),'.',1),'[^0-9]','','g'),10,'0') || '.' ||
@@ -1870,7 +1872,13 @@ function vDatos(A, rows) {
             recorre <b>en tu equipo</b>, sin cargarlo en memoria, y saca de él lo que el tablero sí usa:
             el catálogo y el parque. De gigabytes salen unos pocos MB, <b>sin perder ningún equipo ni
             ninguna versión</b>.</p>
-          <p style="margin:0 0 12px">Y saca también <b>qué equipo tiene qué versión por detrás</b>, que es
+          <div class="banner" style="margin:0 0 12px">${ico('info')}<div>
+            <b>Y te deja un <code>detalle.parquet</code> de unos pocos MB.</b> Arrastra <b>ese</b> y ya:
+            un archivo en vez de tres, y con el detalle completo dentro. El tablero lee Parquet
+            directamente, por columnas y por bloques, así que da igual lo que pese.
+          </div></div>
+          <p style="margin:0 0 12px">Los tres CSV siguen saliendo por si los quieres sueltos. Y saca
+            <b>qué equipo tiene qué versión por detrás</b>, que es
             lo único que el catálogo agregado no puede dar: con él sabes <i>cuántos</i> equipos van
             atrasados, pero no <i>cuáles</i>, y la tabla «Equipos con esta aplicación» sale vacía.
             Solo lleva lo que va por detrás de la versión más alta, que es una fracción pequeña

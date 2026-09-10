@@ -50,7 +50,7 @@
     </svg>
     <h2>Carga el inventario de tus equipos</h2>
     <p>Arrastra <b>uno o varios archivos a la vez</b>: exports de Defender, Intune o cualquier
-       inventario en Excel/CSV. Se funden en un solo modelo, así que puedes traer el parque, el
+       inventario en Excel/CSV/Parquet. Se funden en un solo modelo, así que puedes traer el parque, el
        catálogo y las excepciones por separado, o el mismo inventario partido en lotes.
        Todo se procesa <b>dentro de tu navegador</b>: ningún dato sale del equipo.</p>
     <div class="row" style="justify-content:center">
@@ -70,7 +70,7 @@
       <p class="mini" id="progNota" style="margin:9px 0 0">El archivo no se carga en memoria: se recorre y
         solo se guarda el resumen. Puede tardar unos minutos; no cierres la pestaña.</p>
     </div>
-    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt" multiple hidden>
+    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt,.parquet" multiple hidden>
     <input type="file" id="cfgFile" accept=".json,application/json" hidden>
     <p class="mini" style="margin:14px auto 0;max-width:470px;color:var(--ink-4)">
       ¿No tienes todavía el archivo? <b>Consultas KQL</b> te da las consultas listas para pegar
@@ -78,7 +78,7 @@
       desde la propia página.
     </p>
     <div class="drop-formats">
-      <span class="tag">.XLSX</span><span class="tag">.XLSM</span><span class="tag">.CSV</span><span class="tag">.TSV</span>
+      <span class="tag">.XLSX</span><span class="tag">.XLSM</span><span class="tag">.CSV</span><span class="tag">.TSV</span><span class="tag">.PARQUET</span>
       <span class="tag" style="border-color:rgba(15,254,251,.35);color:var(--brand)">VARIOS A LA VEZ</span>
     </div>
     <div class="privacy">

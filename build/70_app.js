@@ -655,7 +655,7 @@ const TOPE_MB = 400;
 const AVISO_MB = 150;
 
 /** Lee un archivo enorme por trozos y se queda con el resumen. */
-async function importarPorTrozos(file, mb, opts) {
+async function importarPorTrozos(file, mb, opts, parquet) {
   const tam = mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
   const bar = $('#progBar'), pct = $('#progPct'), fase = $('#progFase'), caja = $('#progGrande');
   dropErr.classList.remove('on');
@@ -665,7 +665,8 @@ async function importarPorTrozos(file, mb, opts) {
     `y solo se guarda el resumen. Puede tardar unos minutos; no cierres la pestaña.`;
 
   try {
-    const r = await importarGrande(file, opts || {}, (frac, filas, etapa) => {
+    const importar = parquet ? importarParquet : importarGrande;
+    const r = await importar(file, opts || {}, (frac, filas, etapa) => {
       bar.style.width = Math.round(frac * 100) + '%';
       pct.textContent = Math.round(frac * 100) + ' %';
       fase.textContent = etapa + (filas ? ` · ${fmt(filas)} filas` : '');
@@ -696,6 +697,16 @@ async function loadFile(file, añadir) {
   dropErr.classList.remove('on'); dropCard.classList.remove('hot');
   const name = file.name || 'archivo';
   const mb = (file.size || 0) / 1048576;
+
+  // Un Parquet no se abre como los demas: se consulta por columnas y por
+  // bloques, asi que da igual lo que pese. Se mira por el nombre y, si no,
+  // por su firma «PAR1».
+  let parquet = /\.parquet$/i.test(name);
+  if (!parquet && file.slice) {
+    try { parquet = esParquet(await file.slice(0, 4).arrayBuffer()); } catch (e) { }
+  }
+  if (parquet) return importarPorTrozos(file, mb, {}, true);
+
   const grande = mb > TOPE_MB;
   if (grande) {
     // Demasiado grande para cargarlo, pero no para recorrerlo. Se lee por trozos

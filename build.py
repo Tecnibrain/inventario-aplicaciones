@@ -26,6 +26,7 @@ PARTES = [
     '30_engine_io.js',   # lectores XLSX/CSV, fechas, deteccion de columnas, datos geo
     '36_model.js',       # modelo multifuente: detalle, agregado y parque
     '38_stream.js',      # lectura por trozos de archivos que no caben en memoria
+    '39_parquet.js',    # lector de Parquet (hyparquet, MIT)
     '40_engine_viz.js',  # agregacion y motor de graficos SVG
     '50_core.js',        # estado, rutas, catalogo, cumplimiento, historico
     '60_views_a.js',     # resumen, cumplimiento, aplicaciones, equipos
