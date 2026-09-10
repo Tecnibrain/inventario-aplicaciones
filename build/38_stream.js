@@ -190,7 +190,7 @@ async function importarGrande(file, opts, onProg) {
   const todo = [['SoftwareVendor', 'SoftwareName', 'SoftwareVersion', 'Equipos']];
   cuenta.forEach((n, k) => { const p = k.split(SEP1); todo.push([p[0], p[1], p[2], String(n)]); });
 
-  M.sources = [];
+  resetModel();
   if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
   if (todo.length > 1) addSource(todo, nombre + ' · catálogo', '', false);
   M.aggFull = aggregate(M.rows);
@@ -256,7 +256,7 @@ async function importarGrande(file, opts, onProg) {
     excep.push([dev, g(f, ix.usr), ven, app, ver, tope.get(ven + SEP1 + app) || '', g(f, ix.osv)]);
   }, (frac, n) => aviso(0.52 + frac * 0.46, n, 'Buscando equipos atrasados'));
 
-  M.sources = [];
+  resetModel();
   if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
   if (catalogo.length > 1) addSource(catalogo, nombre + ' · catálogo', '', false);
   if (excep.length > 1) addSource(excep, nombre + ' · atrasados', '', false);
@@ -388,7 +388,7 @@ async function importarParquet(file, opts, onProg) {
   const todo = [['SoftwareVendor', 'SoftwareName', 'SoftwareVersion', 'Equipos']];
   cuenta.forEach((n, k) => { const p = k.split(SEP1); todo.push([p[0], p[1], p[2], String(n)]); });
 
-  M.sources = [];
+  resetModel();
   if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
   if (todo.length > 1) addSource(todo, nombre + ' · catálogo', '', false);
   M.aggFull = aggregate(M.rows);
@@ -444,7 +444,7 @@ async function importarParquet(file, opts, onProg) {
     excep.push([dev, g(o, col.usr), ven, app, ver, tope.get(ven + SEP1 + app) || '', g(o, col.osv)]);
   }, 0.52, 0.46);
 
-  M.sources = [];
+  resetModel();
   if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
   if (catalogo.length > 1) addSource(catalogo, nombre + ' · catálogo', '', false);
   if (excep.length > 1) addSource(excep, nombre + ' · atrasados', '', false);

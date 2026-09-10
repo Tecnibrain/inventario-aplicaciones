@@ -24,6 +24,9 @@ PARTES = [
     '20_css_app.css',    # shell, navegacion, vistas, semaforos
     '05_body.html',      # cierre de <style>, marcado estatico, apertura de <script>
     '30_engine_io.js',   # lectores XLSX/CSV, fechas, deteccion de columnas, datos geo
+    '35_tabla.js',       # almacen columnar: las filas como enteros. Va ANTES
+                         # que el modelo: este llama a Tabla() al cargarse, y una
+                         # const en zona muerta reventaria el arranque.
     '36_model.js',       # modelo multifuente: detalle, agregado y parque
     '38_stream.js',      # lectura por trozos de archivos que no caben en memoria
     '39_parquet.js',    # lector de Parquet (hyparquet, MIT)

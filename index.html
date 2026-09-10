@@ -1073,6 +1073,299 @@ function detectColumns(headers) {
 }
 
 /* ============================================================================
+   17b. ALMACEN COLUMNAR  ·  las filas como enteros, no como objetos
+   ---------------------------------------------------------------------------
+   Medido sobre 281.634 filas del inventario real: 638 bytes por fila como
+   objetos, 71 como columnas. Nueve veces menos. Con un parque de cinco millones
+   de instalaciones eso es la diferencia entre 3,2 GB -imposible- y unos 300 MB.
+
+   La idea es la de cualquier base columnar: cada valor distinto se guarda UNA
+   vez en un diccionario, y la fila pasa a ser un entero que apunta ahi. En este
+   dato la ganancia es enorme porque son nombres repetidos hasta el infinito:
+   26.864 equipos y 160 aplicaciones para 281.634 filas.
+
+   Dos ventajas que no son de memoria y pesan casi tanto:
+
+     · Agrupar por entero es mucho mas rapido que por cadena, y agregar era el
+       99 % del coste de cada render.
+     · Lo que solo depende del VALOR -si una version es desconocida, si un
+       estado de soporte cuenta como vencido- se calcula una vez por valor
+       distinto y no una vez por fila. De 281.634 comprobaciones a 229.
+
+   Las columnas vacias no se reservan: en el export de Intune, geo, cliente,
+   area y eos vienen sin nada, y son dieciseis bytes por fila que no se pagan.
+   ========================================================================== */
+
+/** Diccionario de valores: da un entero por valor, y el valor por su entero. */
+function Interno() {
+  const map = new Map();
+  const vals = [];
+  return {
+    vals,
+    id(v) {
+      const s = v == null ? '' : String(v);
+      let k = map.get(s);
+      if (k === undefined) { k = vals.length; vals.push(s); map.set(s, k); }
+      return k;
+    },
+    val: k => vals[k] || '',
+    get size() { return vals.length; }
+  };
+}
+
+/** Columna de enteros que crece sola, doblando como cualquier array dinamico. */
+function Columna(cap) {
+  let a = new Int32Array(cap || 4096);
+  let n = 0;
+  return {
+    push(v) {
+      if (n === a.length) { const b = new Int32Array(a.length * 2); b.set(a); a = b; }
+      a[n++] = v;
+    },
+    get(i) { return a[i]; },
+    set(i, v) { a[i] = v; },
+    get array() { return a; },
+    get length() { return n; },
+    get bytes() { return a.length * 4; }
+  };
+}
+
+/* Los campos de texto que se guardan por diccionario. `appKey` va aparte
+   porque es la clave por la que agrupa medio tablero, y como entero eso deja
+   de costar. */
+const CAMPOS_TXT = ['device', 'user', 'domain', 'vendor', 'app', 'appRaw', 'ver',
+                    'os', 'osver', 'geo', 'cliente', 'area', 'eos', 'aprob',
+                    'cpeRaw', 'salud', 'appKey', 'bucket'];
+
+/* Lo que solo depende del VALOR vive aqui, en un sitio: lo usan tanto la
+   lectura por fila como las tablas auxiliares que se pasan a los bucles. */
+/* Lo que se ensena cuando un campo viene vacio. Vive aqui porque lo aplican
+   tanto `fila()` como el filtro, y tienen que coincidir. */
+const DEFECTO = { vendor: '(sin fabricante)', app: '(sin nombre)',
+                  ver: '(sin versión)', osver: '(sin versión)' };
+
+const ES_EOS  = s => /^(eos|endofsupport|fuera|expired|caducad|sin soporte|true|si|yes)/i.test(s);
+const ES_CPE  = s => !!s && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(s);
+const ES_VUNK = s => VER_UNK.test(s || '(sin versión)');
+
+function Tabla() {
+  const dic = {}, col = {};
+  for (const c of CAMPOS_TXT) { dic[c] = Interno(); col[c] = null; }
+  const w = Columna(), dia = Columna();
+  let n = 0;
+
+  // Lo que solo depende del valor se resuelve una vez por valor distinto, no
+  // por fila. Se cachea junto al diccionario.
+  const derivados = {};
+
+  const T = {
+    dic, get length() { return n; },
+
+    /** Anade una fila. Las columnas que nunca traen nada no se crean. */
+    add(o) {
+      for (const c of CAMPOS_TXT) {
+        const v = o[c];
+        if (v == null || v === '') { if (col[c]) col[c].push(0); continue; }
+        if (!col[c]) {
+          // primera vez que este campo trae algo: se crea con ceros detras
+          col[c] = Columna(Math.max(4096, n + 1));
+          dic[c].id('');                       // el 0 es siempre la cadena vacia
+          for (let i = 0; i < n; i++) col[c].push(0);
+        }
+        col[c].push(dic[c].id(v));
+      }
+      w.push(o.w == null ? 1 : o.w);
+      dia.push(o.ts instanceof Date && !isNaN(o.ts) ? Math.floor(o.ts.getTime() / DAY_MS) : -1);
+      return n++;                          // el indice de la fila recien anadida
+    },
+
+    txt(campo, i) { const c = col[campo]; return c ? dic[campo].val(c.get(i)) : ''; },
+    get pesos() { return w.array; },
+    get dias() { return dia.array; },
+
+    /**
+     * Un lector de un solo campo, para sacarlo FUERA del bucle.
+     *
+     * Dentro de un recorrido de millones de vueltas, resolver col[campo] y
+     * dic[campo] en cada una cuesta mas que la lectura misma. Asi se resuelven
+     * una vez y queda una funcion que solo indexa dos arrays.
+     */
+    acceso(campo) {
+      const c = col[campo];
+      if (!c) return () => '';
+      const vals = dic[campo].vals;
+      return i => vals[c.get(i)] || '';
+    },
+    /**
+     * El array de la columna y la lista de valores, sin envoltorio.
+     *
+     * `acceso()` devuelve una funcion, y una llamada por campo y por fila son
+     * decenas de millones en un inventario grande. Con esto el bucle indexa dos
+     * arrays y no llama a nada.
+     */
+    crudo(campo) {
+      const c = col[campo];
+      return { a: c ? c.array : null, vals: dic[campo].vals };
+    },
+
+    /** Igual, pero devuelve el entero: para agrupar sin tocar cadenas. */
+    accesoId(campo) {
+      const c = col[campo];
+      return c ? (i => c.get(i)) : (() => 0);
+    },
+    /** La etiqueta del dia, cacheada: son unos cientos de valores distintos. */
+    diaTxt: (() => {
+      const cache = new Map();
+      return i => {
+        const d = dia.get(i);
+        if (d < 0) return '';
+        let s = cache.get(d);
+        if (s === undefined) cache.set(d, s = dayKey(new Date(d * DAY_MS)));
+        return s;
+      };
+    })(),
+    idDe(campo, i) { const c = col[campo]; return c ? c.get(i) : 0; },
+    tiene: campo => !!col[campo],
+    peso: i => w.get(i),
+    fecha(i) { const d = dia.get(i); return d < 0 ? null : new Date(d * DAY_MS); },
+    diaDe: i => dia.get(i),
+
+    /** Reescribe una columna entera: lo usa el relleno de fabricante. */
+    poner(campo, i, valor) {
+      if (!col[campo]) { col[campo] = Columna(Math.max(4096, n)); dic[campo].id(''); for (let k = 0; k < n; k++) col[campo].push(0); }
+      col[campo].set(i, dic[campo].id(valor));
+    },
+
+    /**
+     * El entero de un valor, para poder escribir una columna entera sin pasar
+     * por el diccionario en cada fila. Crea la columna si aun no existe.
+     */
+    idPara(campo, valor) {
+      if (!col[campo]) { col[campo] = Columna(Math.max(4096, n)); dic[campo].id(''); for (let k = 0; k < n; k++) col[campo].push(0); }
+      return dic[campo].id(valor);
+    },
+
+    ponerFecha(i, fecha) {
+      dia.set(i, fecha instanceof Date && !isNaN(fecha) ? Math.floor(fecha.getTime() / DAY_MS) : -1);
+    },
+
+    /* ---- lo precalculado por valor distinto ---- */
+
+    /**
+     * Una tabla auxiliar indexada por el entero del diccionario.
+     *
+     * Se calcula una vez por valor DISTINTO -229 veces en este inventario, no
+     * 281.634- y leerla despues es indexar un array. Eso es lo que permite
+     * sacar del bucle caliente todo lo que solo depende del valor. Se amplia
+     * sola si llegan valores nuevos mas tarde.
+     */
+    derivado(campo, fn) {
+      let t = derivados[campo];
+      // El 0 es siempre la cadena vacia, tambien en una columna que nunca
+      // llego a crearse: asi quien lea t[0] no se encuentra un hueco.
+      if (!t) { t = derivados[campo] = []; t[0] = fn(''); }
+      const vals = dic[campo].vals;
+      for (let k = t.length; k < vals.length; k++) t[k] = fn(vals[k]);
+      return t;
+    },
+
+    verUnk(i) { return T.derivado('ver', ES_VUNK)[col.ver ? col.ver.get(i) : 0]; },
+    eosBad(i) { return T.derivado('eos', ES_EOS)[col.eos ? col.eos.get(i) : 0]; },
+    cpe(i)    { return T.derivado('cpeRaw', ES_CPE)[col.cpeRaw ? col.cpeRaw.get(i) : 0]; },
+
+    /** Materializa la fila i como el objeto que las vistas esperan. */
+    fila(i) {
+      const o = { _i: i, w: w.get(i) };
+      for (const c of CAMPOS_TXT) o[c] = T.txt(c, i);
+      for (const c in DEFECTO) if (!o[c]) o[c] = DEFECTO[c];
+      o.cpe = T.cpe(i);
+      o.eosBad = T.eosBad(i);
+      o.ts = T.fecha(i);
+      o.day = o.ts ? dayKey(o.ts) : '';
+      return o;
+    },
+
+    /** Cuanto ocupa, para poder decirlo sin estimar. */
+    bytes() {
+      let b = (w.bytes + dia.bytes);
+      for (const c of CAMPOS_TXT) {
+        if (col[c]) b += col[c].bytes;
+        for (const s of dic[c].vals) b += 40 + s.length * 2;
+      }
+      return b;
+    }
+  };
+  return T;
+}
+
+/**
+ * Un conjunto de filas: la tabla mas, opcionalmente, que indices.
+ *
+ * Se comporta como el array de objetos que habia antes -length, recorrido,
+ * filter, map, some, find- para que las vistas no se enteren del cambio. La
+ * diferencia esta en filter: en vez de copiar objetos devuelve otra vista con
+ * una lista de indices, que son cuatro bytes por fila en lugar de seiscientos.
+ */
+function Filas(tabla, idx) {
+  return {
+    tabla, idx,
+    get length() { return idx ? idx.length : tabla.length; },
+    en(k) { return tabla.fila(idx ? idx[k] : k); },
+    fisico(k) { return idx ? idx[k] : k; },
+
+    [Symbol.iterator]() {
+      const n = idx ? idx.length : tabla.length;
+      let k = 0;
+      return { next: () => k < n ? { value: tabla.fila(idx ? idx[k++] : k++), done: false }
+                                  : { value: undefined, done: true } };
+    },
+
+    filter(fn) {
+      const n = idx ? idx.length : tabla.length;
+      const out = [];
+      for (let k = 0; k < n; k++) {
+        const i = idx ? idx[k] : k;
+        if (fn(tabla.fila(i), k)) out.push(i);
+      }
+      return Filas(tabla, Int32Array.from(out));
+    },
+    map(fn) {
+      const n = idx ? idx.length : tabla.length;
+      const out = new Array(n);
+      for (let k = 0; k < n; k++) out[k] = fn(tabla.fila(idx ? idx[k] : k), k);
+      return out;
+    },
+    some(fn) {
+      const n = idx ? idx.length : tabla.length;
+      for (let k = 0; k < n; k++) if (fn(tabla.fila(idx ? idx[k] : k), k)) return true;
+      return false;
+    },
+    find(fn) {
+      const n = idx ? idx.length : tabla.length;
+      for (let k = 0; k < n; k++) { const o = tabla.fila(idx ? idx[k] : k); if (fn(o, k)) return o; }
+      return undefined;
+    },
+    /** Recorre dando el indice fisico: para los bucles que leen columnas. */
+    cada(fn) {
+      const n = idx ? idx.length : tabla.length;
+      for (let k = 0; k < n; k++) fn(idx ? idx[k] : k, k);
+    },
+    forEach(fn) {
+      const n = idx ? idx.length : tabla.length;
+      for (let k = 0; k < n; k++) fn(tabla.fila(idx ? idx[k] : k), k);
+    },
+    slice(a, b) {
+      const n = idx ? idx.length : tabla.length;
+      const ini = a == null ? 0 : (a < 0 ? Math.max(0, n + a) : Math.min(a, n));
+      const fin = b == null ? n : (b < 0 ? Math.max(0, n + b) : Math.min(b, n));
+      const out = new Int32Array(Math.max(0, fin - ini));
+      for (let k = ini; k < fin; k++) out[k - ini] = idx ? idx[k] : k;
+      return Filas(tabla, out);
+    }
+  };
+}
+
+/* ============================================================================
    4. MODELO  ·  varias fuentes, detalle y agregado en el mismo tablero
    ----------------------------------------------------------------------------
    Un inventario completo (equipo x aplicacion x version) de un parque grande no
@@ -1088,12 +1381,18 @@ function detectColumns(headers) {
    de filas. El detalle se anade solo donde hace falta: las excepciones.
    ========================================================================== */
 const M = {
-  rows: [], devInfo: new Map(), sources: [], headers: [], cols: {},
+  tabla: null, rows: null, devInfo: new Map(), sources: [], headers: [], cols: {},
   fileName: '', sheet: '', mode: 'detalle',
   hasGeo: false, hasCliente: false, hasArea: false, hasTime: false, hasUser: false,
   hasEos: false, hasDetalle: false, hasAgregado: false,
   deviceApps: new Map(), latestVer: new Map(), maxDate: null, minDate: null
 };
+
+// El modelo arranca con una tabla vacia, no con un array suelto: asi todo lo que
+// recorre filas encuentra siempre la misma forma y no hay que distinguir casos.
+M.tabla = Tabla();
+M.rows = Filas(M.tabla, new Int32Array(0));
+
 
 /* Tramos del histograma de densidad de software por equipo. */
 const BUCKETS = [[1,10,'1–10'],[11,25,'11–25'],[26,40,'26–40'],[41,55,'41–55'],
@@ -1158,6 +1457,18 @@ function explicaCabeceras(headers, grid) {
  * Lee una cuadricula y la funde en el modelo. `reset` empieza de cero;
  * si no, acumula: asi se cargan parque + catalogo + excepciones por separado.
  */
+/**
+ * Empieza de cero. Vaciar `M.sources` no basta: las filas viven en la tabla
+ * columnar y se quedaban dentro aunque ya no las apuntase ninguna fuente, asi
+ * que importar un segundo archivo sin recargar la pagina arrastraba el primero.
+ */
+function resetModel() {
+  M.sources = [];
+  M.tabla = Tabla();
+  M.rows = Filas(M.tabla, new Int32Array(0));
+  M.devInfo = new Map();
+}
+
 function addSource(grid, fileName, sheet, reset) {
   const headers = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
   // Antes de detectar nada: si la cabecera llego entera en una sola columna, lo
@@ -1168,10 +1479,11 @@ function addSource(grid, fileName, sheet, reset) {
   const shape = shapeOf(cols);
   if (!shape) throw new Error(explicaCabeceras(headers, grid));
 
-  if (reset) M.sources = [];
+  if (reset) resetModel();
 
+  if (!M.tabla) M.tabla = Tabla();
   const g = (r, k) => cols[k] == null ? '' : (r[cols[k]] == null ? '' : r[cols[k]]);
-  const nuevas = [];
+  const nuevas = [];                     // indices en la tabla, no objetos
   // Cada fuente guarda sus propias filas y fichas de equipo. Asi retirar un
   // archivo cargado por error es rehacer la mezcla sin el, no deshacerla.
   const fichas = new Map();
@@ -1230,29 +1542,30 @@ function addSource(grid, fileName, sheet, reset) {
       app:     appGrp || app || '(sin nombre)',
       appRaw:  appRaw || '(sin nombre)',
       ver:     verUsable || '(sin versión)',
-      nVer,
       cpeRaw,
-      cpe:     !!cpeRaw && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(cpeRaw),
       os:      String(g(r, 'os')).trim(),
       osver:   String(g(r, 'osver')).trim() || '(sin versión)',
       geo:     String(g(r, 'geo')).trim(),
       cliente: String(g(r, 'cliente')).trim(),
       area:    String(g(r, 'area')).trim(),
-      eos, eosBad: /^(eos|endofsupport|fuera|expired|caducad|sin soporte|true|si|yes)/i.test(eos),
+      eos,
       aprob:   String(g(r, 'approved')).trim() || (nVer > 1 ? verFila : ''),
-      ts, day: dayKey(ts), _raw: r
+      ts
     };
     o.appKey = o.vendor + ' / ' + o.app;
-    nuevas.push(o);
+    // El objeto es de usar y tirar: la tabla se queda con los enteros.
+    nuevas.push(M.tabla.add(o));
   }
 
   if (!nuevas.length && shape !== 'parque')
     throw new Error('El archivo no contiene filas de datos por debajo de la cabecera.');
 
-  const truncado = detectaCorte(shape, grid.length - 1, nuevas, fichas.size);
+  const idx = Int32Array.from(nuevas);
+  const vista = Filas(M.tabla, idx);
+  const truncado = detectaCorte(shape, grid.length - 1, vista, fichas.size);
   M.sources.push({ name: fileName, sheet, shape, cols, headers, truncado,
-                   filas: nuevas.length || (grid.length - 1), equipos: fichas.size,
-                   rows: nuevas, devs: fichas });
+                   filas: idx.length || (grid.length - 1), equipos: fichas.size,
+                   rows: vista, idx, devs: fichas });
   mergeSources();
   return M.sources[M.sources.length - 1];
 }
@@ -1269,7 +1582,8 @@ function detectaSolape() {
   for (const s of M.sources) {
     const donde = s.shape === 'agregado' ? agg : s.shape === 'detalle' ? det : null;
     if (!donde) continue;
-    for (const r of s.rows) donde.add(r.appKey + String.fromCharCode(1) + r.ver);
+    const gK = M.tabla.acceso('appKey'), gV = M.tabla.acceso('ver');
+    s.rows.cada(i => donde.add(gK(i) + String.fromCharCode(1) + gV(i)));
   }
   let n = 0;
   agg.forEach(k => { if (det.has(k)) n++; });
@@ -1289,36 +1603,46 @@ function detectaSolape() {
  */
 function rellenaFabricante() {
   const conocido = new Map();               // nombre -> Map(fabricante -> peso)
-  for (const r of M.rows) {
-    if (r.vendor === '(sin fabricante)') continue;
-    let m = conocido.get(r.app);
-    if (!m) conocido.set(r.app, m = new Map());
-    m.set(r.vendor, (m.get(r.vendor) || 0) + (r.w || 1));
-  }
+  const T = M.tabla;
+  const gVen = T.acceso('vendor'), gApp = T.acceso('app');
+  M.rows.cada(i => {
+    const ven = gVen(i) || '(sin fabricante)';
+    if (ven === '(sin fabricante)') return;
+    const app = gApp(i);
+    let m = conocido.get(app);
+    if (!m) conocido.set(app, m = new Map());
+    m.set(ven, (m.get(ven) || 0) + T.peso(i));
+  });
   let n = 0;
-  for (const r of M.rows) {
-    if (r.vendor !== '(sin fabricante)') continue;
-    const m = conocido.get(r.app);
-    if (!m) continue;
+  M.rows.cada(i => {
+    if ((gVen(i) || '(sin fabricante)') !== '(sin fabricante)') return;
+    const app = gApp(i);
+    const m = conocido.get(app);
+    if (!m) return;
     let mejor = '', peso = -1;
     m.forEach((w, v) => { if (w > peso) { peso = w; mejor = v; } });
-    if (!mejor) continue;
-    r.vendor = mejor;
-    r.appKey = mejor + ' / ' + r.app;
+    if (!mejor) return;
+    T.poner('vendor', i, mejor);
+    T.poner('appKey', i, mejor + ' / ' + app);
     n++;
-  }
+  });
   return n;
 }
 
 /** Rehace el modelo a partir de las fuentes que queden. */
 function mergeSources() {
-  M.rows = [];
   M.devInfo = new Map();
   M.hasDetalle = false;
   M.hasAgregado = false;
   M.headers = [];
+  // Nada que copiar: se juntan los indices de cada fuente y ya.
+  let n = 0;
+  for (const s of M.sources) n += s.idx.length;
+  const todos = new Int32Array(n);
+  let k = 0;
+  for (const s of M.sources) { todos.set(s.idx, k); k += s.idx.length; }
+  M.rows = Filas(M.tabla || (M.tabla = Tabla()), todos);
   for (const s of M.sources) {
-    M.rows = M.rows.concat(s.rows);
     s.devs.forEach((d, k) => {
       let t = M.devInfo.get(k);
       if (!t) M.devInfo.set(k, t = { device: k });
@@ -1354,8 +1678,12 @@ function detectaCorte(shape, filas, nuevas, devs) {
   for (const t of TOPES) if (filas >= t * 0.995 && filas <= t) señales.push('el recuento (' + fmt(filas) + ') coincide con un tope de exportación habitual');
   if (shape === 'detalle' && nuevas.length > 200) {
     // si el corte cayo dentro de un equipo, el ultimo tendra muchas menos filas
+    // Por el ENTERO del equipo: materializar las filas como objetos solo para
+    // contarlas costaba mas que todo lo demas junto de esta comprobacion. El
+    // orden de insercion se respeta, que es de lo que depende «el ultimo».
     const porDev = new Map();
-    for (const r of nuevas) if (r.device) porDev.set(r.device, (porDev.get(r.device) || 0) + 1);
+    const aD = nuevas.tabla.crudo('device').a;
+    if (aD) nuevas.cada(i => { const dv = aD[i]; if (dv) porDev.set(dv, (porDev.get(dv) || 0) + 1); });
     const lista = Array.from(porDev.values());
     if (lista.length > 20) {
       const ord = lista.slice().sort((a, b) => a - b);
@@ -1373,50 +1701,120 @@ function recomputeModel() {
   const rows = M.rows;
   M.mode = M.hasDetalle && M.hasAgregado ? 'mixto' : M.hasAgregado ? 'agregado' : 'detalle';
 
-  // completar cada fila con la ficha del equipo, para que los filtros funcionen
-  for (const r of rows) {
-    if (!r.device) continue;
-    const d = M.devInfo.get(r.device);
-    if (!d) continue;
-    if (!r.user && d.user) r.user = d.user;
-    if ((!r.osver || r.osver === '(sin versión)') && d.osver) r.osver = d.osver;
-    if (!r.os && d.os) r.os = d.os;
-    if (!r.geo && d.geo) r.geo = d.geo;
-    if (!r.cliente && d.cliente) r.cliente = d.cliente;
-    if (!r.area && d.area) r.area = d.area;
-    if (!r.ts && d.ts) { r.ts = d.ts; r.day = dayKey(d.ts); }
+  // Completar cada fila con la ficha del equipo, para que los filtros
+  // funcionen. La ficha se busca por el ENTERO del equipo: una vez por equipo
+  // distinto -26.863- y no una por cada fila.
+  const T = M.tabla;
+  const idxR = rows.idx, nR = rows.length;
+  const cDevR = T.crudo('device'), aDevR = cDevR.a, vDevR = cDevR.vals;
+
+  if (M.devInfo.size && aDevR) {
+    const ficha = new Array(vDevR.length);
+    let alguna = false;
+    for (let k = 1; k < vDevR.length; k++) {
+      const f = M.devInfo.get(vDevR[k]);
+      if (f) { ficha[k] = f; alguna = true; }
+    }
+    if (alguna) {
+      const gUsrR = T.acceso('user'), gOsvR = T.acceso('osver'), gOsR = T.acceso('os');
+      const gGeoR = T.acceso('geo'), gCliR = T.acceso('cliente'), gAreR = T.acceso('area');
+      for (let k = 0; k < nR; k++) {
+        const i = idxR ? idxR[k] : k;
+        const d = ficha[aDevR[i]];
+        if (!d) continue;
+        if (!gUsrR(i) && d.user) T.poner('user', i, d.user);
+        const ov = gOsvR(i);
+        if ((!ov || ov === '(sin versión)') && d.osver) T.poner('osver', i, d.osver);
+        if (!gOsR(i) && d.os) T.poner('os', i, d.os);
+        if (!gGeoR(i) && d.geo) T.poner('geo', i, d.geo);
+        if (!gCliR(i) && d.cliente) T.poner('cliente', i, d.cliente);
+        if (!gAreR(i) && d.area) T.poner('area', i, d.area);
+        if (T.diaDe(i) < 0 && d.ts) T.ponerFecha(i, d.ts);
+      }
+    }
   }
 
-  // recuento de apps por equipo -> bucket del histograma (solo con detalle)
-  const dm = new Map();
-  for (const r of rows) if (r.device) {
-    let s = dm.get(r.device); if (!s) dm.set(r.device, s = new Set());
-    s.add(r.appKey);
+  // Recuento de apps por equipo -> bucket del histograma (solo con detalle).
+  // Se cuenta por entero y el bucket se resuelve una vez por equipo, no por
+  // fila: escribir la columna pasa a ser copiar un numero.
+  const cKeyR = T.crudo('appKey'), aKeyR = cKeyR.a, vKeyR = cKeyR.vals;
+  const porEquipo = new Map();
+  if (aDevR) for (let k = 0; k < nR; k++) {
+    const i = idxR ? idxR[k] : k;
+    const dv = aDevR[i];
+    if (!dv) continue;
+    let s = porEquipo.get(dv); if (!s) porEquipo.set(dv, s = new Set());
+    s.add(aKeyR ? aKeyR[i] : 0);
   }
-  const counts = new Map();
-  dm.forEach((s, d) => counts.set(d, s.size));
-  for (const r of rows) r.bucket = r.device ? bucketOf(counts.get(r.device) || 0) : '(agregado)';
+  const counts = new Map();                       // por nombre: lo lee el resto
+  const cuentaPorId = [];
+  porEquipo.forEach((s, dv) => { cuentaPorId[dv] = s.size; counts.set(vDevR[dv], s.size); });
 
-  // version de referencia: la mas alta vista en todas las fuentes
+  const idAgregado = T.idPara('bucket', '(agregado)');
+  const idBucket = [];                            // recuento -> entero del bucket
+  const bucketDeId = aDevR ? new Int32Array(vDevR.length) : null;
+  if (bucketDeId) for (let dv = 1; dv < vDevR.length; dv++) {
+    const c = cuentaPorId[dv] || 0;
+    let b = idBucket[c];
+    if (b === undefined) b = idBucket[c] = T.idPara('bucket', bucketOf(c));
+    bucketDeId[dv] = b;
+  }
+  const aBucR = T.crudo('bucket').a;
+  for (let k = 0; k < nR; k++) {
+    const i = idxR ? idxR[k] : k;
+    const dv = aDevR ? aDevR[i] : 0;
+    aBucR[i] = dv ? bucketDeId[dv] : idAgregado;
+  }
+
+  // Version de referencia: la mas alta vista en todas las fuentes. Solo depende
+  // de los pares (aplicacion, version) DISTINTOS, que son unos cientos. Se
+  // apuntan como un entero por fila -barato- y comparar versiones, que es lo
+  // caro, se hace una vez por par y no una por fila.
+  const cVerR = T.crudo('ver'), aVerR = cVerR.a, vVerR = cVerR.vals;
+  const dUnkR = T.derivado('ver', ES_VUNK);
+  const NK = Math.max(1, vKeyR.length);
+  const pares = new Set();
+  for (let k = 0; k < nR; k++) {
+    const i = idxR ? idxR[k] : k;
+    const vi = aVerR ? aVerR[i] : 0;
+    if (dUnkR[vi]) continue;
+    pares.add(vi * NK + (aKeyR ? aKeyR[i] : 0));
+  }
   const latestVer = new Map();
-  for (const r of rows) {
-    if (VER_UNK.test(r.ver)) continue;
-    const cur = latestVer.get(r.appKey);
-    if (cur === undefined || verCmp(r.ver, cur) > 0) latestVer.set(r.appKey, r.ver);
+  pares.forEach(par => {
+    const ver = vVerR[(par / NK) | 0] || '', key = vKeyR[par % NK] || '';
+    const cur = latestVer.get(key);
+    if (cur === undefined || verCmp(ver, cur) > 0) latestVer.set(key, ver);
+  });
+
+  // De las fechas solo hacen falta la primera y la ultima: no hay que juntar
+  // 281.634 en un array para luego mirar dos. Las filas se guardan por dia; las
+  // fichas de equipo conservan la hora, asi que se comparan aparte.
+  const diasR = T.dias;
+  let diaMin = Infinity, diaMax = -Infinity;
+  for (let k = 0; k < nR; k++) {
+    const d = diasR[idxR ? idxR[k] : k];
+    if (d < 0) continue;
+    if (d < diaMin) diaMin = d;
+    if (d > diaMax) diaMax = d;
   }
+  let tMin = Infinity, tMax = -Infinity;
+  M.devInfo.forEach(d => { if (d.ts) { const t = +d.ts; if (t < tMin) tMin = t; if (t > tMax) tMax = t; } });
+  if (diaMax >= 0) { tMin = Math.min(tMin, diaMin * DAY_MS); tMax = Math.max(tMax, diaMax * DAY_MS); }
+  const hayFecha = tMax > -Infinity;
 
-  const fechas = [];
-  for (const r of rows) if (r.ts) fechas.push(+r.ts);
-  M.devInfo.forEach(d => { if (d.ts) fechas.push(+d.ts); });
-
-  const tiene = k => rows.some(r => r[k]) || Array.from(M.devInfo.values()).some(d => d[k]);
+  // Que una columna EXISTA ya significa que alguna fila trajo algo: la tabla no
+  // crea columnas vacias. Preguntarlo asi cuesta nada; recorrer las filas para
+  // averiguarlo costaba una pasada entera por cada campo.
+  const enFichas = k => { for (const d of M.devInfo.values()) if (d[k]) return true; return false; };
+  const tiene = k => T.tiene(k) || enFichas(k);
   Object.assign(M, {
     deviceApps: counts, latestVer,
     hasGeo: tiene('geo'), hasCliente: tiene('cliente'), hasArea: tiene('area'),
-    hasUser: tiene('user'), hasEos: rows.some(r => r.eos),
-    hasTime: fechas.length > 0,
-    minDate: fechas.length ? new Date(vMin(fechas)) : null,
-    maxDate: fechas.length ? new Date(vMax(fechas)) : null
+    hasUser: tiene('user'), hasEos: T.tiene('eos'),
+    hasTime: hayFecha,
+    minDate: hayFecha ? new Date(tMin) : null,
+    maxDate: hayFecha ? new Date(tMax) : null
   });
   return M;
 }
@@ -1615,7 +2013,7 @@ async function importarGrande(file, opts, onProg) {
   const todo = [['SoftwareVendor', 'SoftwareName', 'SoftwareVersion', 'Equipos']];
   cuenta.forEach((n, k) => { const p = k.split(SEP1); todo.push([p[0], p[1], p[2], String(n)]); });
 
-  M.sources = [];
+  resetModel();
   if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
   if (todo.length > 1) addSource(todo, nombre + ' · catálogo', '', false);
   M.aggFull = aggregate(M.rows);
@@ -1681,7 +2079,7 @@ async function importarGrande(file, opts, onProg) {
     excep.push([dev, g(f, ix.usr), ven, app, ver, tope.get(ven + SEP1 + app) || '', g(f, ix.osv)]);
   }, (frac, n) => aviso(0.52 + frac * 0.46, n, 'Buscando equipos atrasados'));
 
-  M.sources = [];
+  resetModel();
   if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
   if (catalogo.length > 1) addSource(catalogo, nombre + ' · catálogo', '', false);
   if (excep.length > 1) addSource(excep, nombre + ' · atrasados', '', false);
@@ -1813,7 +2211,7 @@ async function importarParquet(file, opts, onProg) {
   const todo = [['SoftwareVendor', 'SoftwareName', 'SoftwareVersion', 'Equipos']];
   cuenta.forEach((n, k) => { const p = k.split(SEP1); todo.push([p[0], p[1], p[2], String(n)]); });
 
-  M.sources = [];
+  resetModel();
   if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
   if (todo.length > 1) addSource(todo, nombre + ' · catálogo', '', false);
   M.aggFull = aggregate(M.rows);
@@ -1869,7 +2267,7 @@ async function importarParquet(file, opts, onProg) {
     excep.push([dev, g(o, col.usr), ven, app, ver, tope.get(ven + SEP1 + app) || '', g(o, col.osv)]);
   }, 0.52, 0.46);
 
-  M.sources = [];
+  resetModel();
   if (parque.length > 1) addSource(parque, nombre + ' · parque', '', false);
   if (catalogo.length > 1) addSource(catalogo, nombre + ' · catálogo', '', false);
   if (excep.length > 1) addSource(excep, nombre + ' · atrasados', '', false);
@@ -1928,43 +2326,96 @@ const sizeDesc = m => Array.from(m.entries()).map(([k, s]) => [k, s.size]).sort(
 function aggregate(rows) {
   const A = {
     n: rows.length,
-    devSet: new CSet(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
+    devSet: new Set(), vendorDev: new Map(), appDev: new Map(),
     appMeta: new Map(), appRaws: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
     appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
-    dayDev: new Map(), bucketDev: new Map(), devApps: new Map(), devLast: new Map(),
-    cpeYes: 0, cpeNo: 0, eosRows: 0, vendorRows: new Map(), userSet: new Set()
+    dayDev: new Map(), bucketDev: new Map(), devApps: new Map(),
+    cpeYes: 0, cpeNo: 0, eosRows: 0
   };
-  for (const r of rows) {
-    const w = r.w || 1;
-    if (r.device) A.devSet.add(r.device);
-    addTo(A.vendorDev, r.vendor, r.device, w);
-    inc(A.vendorRows, r.vendor, w);
-    addTo(A.appDev, r.appKey, r.device, w);
-    addTo(A.appVers, r.appKey, r.ver);
-    if (!A.appMeta.has(r.appKey)) A.appMeta.set(r.appKey, { vendor: r.vendor, app: r.app });
-    // los nombres tal y como venian, para poder enseñar que se ha agrupado
-    if (r.appRaw && r.appRaw !== r.app) {
-      let s = A.appRaws.get(r.appKey); if (!s) A.appRaws.set(r.appKey, s = new Set());
-      s.add(r.appRaw);
+
+  /* Dentro del bucle no se llama a nada y se agrupa por enteros siempre que se
+     puede. Con 281.634 filas, una llamada por campo son millones de llamadas y
+     cuestan mas que la lectura; y una clave de texto obliga a rehacer el hash
+     de la cadena en cada vuelta. Lo que se agrupa por entero recupera su nombre
+     al terminar, que son 160 aplicaciones y no 281.634 filas. */
+  const T = rows.tabla;
+  const par = c => { const x = T.crudo(c); return [x.a, x.vals]; };
+  const [aDev, vDev] = par('device'),  [aVen, vVen] = par('vendor');
+  const [aApp, vApp] = par('app'),     [aKey, vKey] = par('appKey');
+  const [aVer, vVer] = par('ver'),     [aRaw, vRaw] = par('appRaw');
+  const [aOsv, vOsv] = par('osver'),   [aGeo, vGeo] = par('geo');
+  const [aCli, vCli] = par('cliente'), [aAre, vAre] = par('area');
+  const [aBuc, vBuc] = par('bucket');
+  const aEos = T.crudo('eos').a, aCpe = T.crudo('cpeRaw').a;
+  const dEos = T.derivado('eos', ES_EOS), dCpe = T.derivado('cpeRaw', ES_CPE);
+  const pesos = T.pesos, dias = T.dias;
+  const idx = rows.idx, nFilas = rows.length;
+
+  for (let k = 0; k < nFilas; k++) {
+    const i = idx ? idx[k] : k;
+    const w = pesos[i];
+    const dv = aDev ? aDev[i] : 0;              // el entero del equipo
+    const ki = aKey ? aKey[i] : 0;              // el de la aplicacion
+    const device = dv ? vDev[dv] : '';
+    const key = vKey[ki] || '';
+    const ver = aVer ? vVer[aVer[i]] : '';
+    const osver = aOsv ? vOsv[aOsv[i]] : '';
+    const vendor = aVen ? vVen[aVen[i]] : '';
+
+    if (dv) A.devSet.add(dv);
+    addTo(A.vendorDev, vendor, device, w);
+    addTo(A.appDev, key, device, w);
+    if (!A.appMeta.has(ki)) A.appMeta.set(ki, { vendor, app: aApp ? vApp[aApp[i]] : '' });
+    // los nombres tal y como venian, para poder enseñar que se ha agrupado; el
+    // que coincide con el nombre agrupado se descarta al final, no aqui
+    if (aRaw) {
+      const ri = aRaw[i];
+      if (ri) { let s = A.appRaws.get(ki); if (!s) A.appRaws.set(ki, s = new Set()); s.add(ri); }
     }
-    if (r.device) addTo(A.devApps, r.device, r.appKey);
-    addTo(A.osDev, r.osver, r.device, w);
-    if (r.geo) addTo(A.geoDev, r.geo, r.device, w);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device, w);
-    if (r.area) addTo(A.areaDev, r.area, r.device, w);
-    if (r.day) addTo(A.dayDev, r.day, r.device, w);
-    addTo(A.bucketDev, r.bucket, r.device, w);
-    if (r.user) A.userSet.add(r.user);
-    if (r.eosBad) A.eosRows += w;
-    r.cpe ? A.cpeYes += w : A.cpeNo += w;
-    if (r.ts) { const p = A.devLast.get(r.device); if (!p || r.ts > p) A.devLast.set(r.device, r.ts); }
+    if (dv) { let s = A.devApps.get(dv); if (!s) A.devApps.set(dv, s = new Set()); s.add(ki); }
+    addTo(A.osDev, osver, device, w);
+    if (aGeo) { const g = vGeo[aGeo[i]]; if (g) addTo(A.geoDev, g, device, w); }
+    if (aCli) { const c = vCli[aCli[i]]; if (c) addTo(A.clienteDev, c, device, w); }
+    if (aAre) { const a = vAre[aAre[i]]; if (a) addTo(A.areaDev, a, device, w); }
+    const dd = dias[i];
+    if (dd >= 0) addTo(A.dayDev, dd, device, w);   // por numero; la etiqueta, al final
+    if (aBuc) addTo(A.bucketDev, vBuc[aBuc[i]], device, w);
+    if (aEos && dEos[aEos[i]]) A.eosRows += w;
+    (aCpe && dCpe[aCpe[i]]) ? A.cpeYes += w : A.cpeNo += w;
     // cobertura app x versionSO
-    let mm = A.verOsDev.get(r.appKey); if (!mm) A.verOsDev.set(r.appKey, mm = new Map());
-    addTo(mm, r.osver, r.device, w);
+    let mm = A.verOsDev.get(ki); if (!mm) A.verOsDev.set(ki, mm = new Map());
+    addTo(mm, osver, device, w);
     // reparto de versiones dentro de cada app
-    let vv = A.appVerDev.get(r.appKey); if (!vv) A.appVerDev.set(r.appKey, vv = new Map());
-    addTo(vv, r.ver, r.device, w);
+    let vv = A.appVerDev.get(ki); if (!vv) A.appVerDev.set(ki, vv = new Map());
+    addTo(vv, ver, device, w);
   }
+
+  /* --- se les devuelve el nombre a las claves que iban por entero --- */
+  const nombra = m => { const r = new Map(); m.forEach((v, ki) => r.set(vKey[ki] || '', v)); return r; };
+  A.appMeta = nombra(A.appMeta);
+  A.verOsDev = nombra(A.verOsDev);
+  A.appVerDev = nombra(A.appVerDev);
+  A.appRaws = (() => {
+    const r = new Map();
+    A.appRaws.forEach((s, ki) => {
+      const nombre = vKey[ki] || '', propio = (A.appMeta.get(nombre) || {}).app;
+      const t = new Set();
+      s.forEach(ri => { const x = vRaw[ri]; if (x && x !== propio) t.add(x); });
+      if (t.size) r.set(nombre, t);
+    });
+    return r;
+  })();
+  // El dia se acumulo por numero, que es una clave barata. Etiquetarlo ahora
+  // son unas decenas de entradas en vez de una por fila.
+  if (A.dayDev.size) {
+    const conFecha = new Map();
+    A.dayDev.forEach((s, dd) => conFecha.set(dayKey(new Date(dd * DAY_MS)), s));
+    A.dayDev = conFecha;
+  }
+  // Las versiones distintas por aplicacion son justo las claves del reparto:
+  // no hace falta un conjunto aparte que se rellene fila a fila.
+  A.appVers = A.appVerDev;
+
   A.nDev = A.devSet.size;
   A.nDevEstimado = false;
   // El archivo de parque es el censo: manda sobre los equipos que aparezcan en
@@ -2432,7 +2883,9 @@ const S = {
 function val(r, dim) {
   switch (dim) {
     case 'cpeK':  return r.cpe ? 'Con CPE' : 'Sin CPE';
-    case 'cumpl': return CMP.rowState.get(r) || 'Sin estándar';
+    // el estado va por indice de fila, no por objeto: cada recorrido crea
+    // objetos nuevos y una clave por objeto no volveria a encontrarse nunca
+    case 'cumpl': return EST_ORD[CMP.rowState[r._i]] || 'Sin estándar';
     case 'cat':   return (rule(r.appKey) || {}).cat || 'Otro';
     case 'gestK': return (rule(r.appKey) || {}).gest ? 'Administrada' : 'No administrada';
     default:      return r[dim];
@@ -2455,18 +2908,107 @@ const activeDims = () => Object.keys(S.f);
    de M ni de CFG, que se serializan: un contador no tiene por que persistir. */
 let MODELO_V = 0, REGLAS_V = 0;
 
+/**
+ * Que valores de una dimension pasan el filtro, decidido UNA vez por valor.
+ *
+ * Devuelve `{paso, a}`: `a` es la columna de enteros de la fila y `paso` dice,
+ * para cada entero, si pasa. Filtrar una fila queda en `paso[a[i]]`. Casi todas
+ * las dimensiones salen de una columna -«cat» y «gestK» de appKey, «cpeK» de
+ * cpeRaw, «cumpl» del estado que ya esta calculado por fila-, y las que no,
+ * devuelven null para que se recorra a la antigua.
+ */
+function pruebaDim(T, dim) {
+  const permitidos = S.f[dim];
+  const porColumna = (campo, etiqueta) => {
+    const c = T.crudo(campo);
+    const paso = new Uint8Array(Math.max(1, c.vals.length));
+    for (let k = 0; k < paso.length; k++) paso[k] = permitidos.has(etiqueta(c.vals[k] || '')) ? 1 : 0;
+    return { paso, a: c.a };                     // `a` nulo: la columna no existe
+  };
+  switch (dim) {
+    case 'cpeK':  return porColumna('cpeRaw', s => ES_CPE(s) ? 'Con CPE' : 'Sin CPE');
+    case 'cat':   return porColumna('appKey', k => (rule(k) || {}).cat || 'Otro');
+    case 'gestK': return porColumna('appKey', k => (rule(k) || {}).gest ? 'Administrada' : 'No administrada');
+    case 'cumpl': {
+      const paso = new Uint8Array(EST_ORD.length);
+      for (let k = 0; k < paso.length; k++) paso[k] = permitidos.has(EST_ORD[k] || 'Sin estándar') ? 1 : 0;
+      const est = CMP.rowState.length >= T.length ? CMP.rowState : new Uint8Array(T.length);
+      return { paso, a: est };
+    }
+    case 'day': {
+      // El dia se guarda como numero; se etiqueta solo los que existen de
+      // verdad, que son unos pocos, y no los veinte mil del calendario.
+      const dias = T.dias, n = T.length;
+      let ultimo = 0;
+      for (let i = 0; i < n; i++) if (dias[i] > ultimo) ultimo = dias[i];
+      const paso = new Uint8Array(ultimo + 1);
+      const vistos = new Set();
+      for (let i = 0; i < n; i++) { const dd = dias[i]; if (dd >= 0) vistos.add(dd); }
+      vistos.forEach(dd => { if (permitidos.has(dayKey(new Date(dd * DAY_MS)))) paso[dd] = 1; });
+      return { paso, a: dias };
+    }
+    default:
+      if (!CAMPOS_TXT.includes(dim)) return null;   // dimension que no es columna
+      return porColumna(dim, s => s || DEFECTO[dim] || '');
+  }
+}
+
+/** Lo mismo para la busqueda de texto: se mira una vez por valor distinto en
+ *  cada campo buscable, y luego la fila solo consulta. */
+function pruebaTexto(T, q) {
+  const salida = [];
+  for (const campo of ['device', 'appKey', 'ver', 'geo', 'user', 'cliente']) {
+    const c = T.crudo(campo);
+    if (!c.a) continue;
+    const paso = new Uint8Array(c.vals.length);
+    for (let k = 0; k < paso.length; k++) {
+      const s = c.vals[k] || DEFECTO[campo] || '';
+      paso[k] = s && s.toLowerCase().includes(q) ? 1 : 0;
+    }
+    salida.push({ paso, a: c.a });
+  }
+  return salida;
+}
+
 function filterRows(exceptDim) {
   const dims = activeDims().filter(d => d !== exceptDim);
   const q = S.q.trim().toLowerCase();
   if (!dims.length && !q) return M.rows;
-  return M.rows.filter(r => {
-    for (const d of dims) if (!S.f[d].has(val(r, d))) return false;
-    if (q && !(r.device.toLowerCase().includes(q) || r.appKey.toLowerCase().includes(q) ||
-               r.ver.toLowerCase().includes(q) || (r.geo && r.geo.toLowerCase().includes(q)) ||
-               (r.user && r.user.toLowerCase().includes(q)) ||
-               (r.cliente && r.cliente.toLowerCase().includes(q)))) return false;
-    return true;
-  });
+
+  const T = M.tabla;
+  const vacio = () => Filas(T, new Int32Array(0));
+  const pruebas = [];
+  const lentas = [];
+  for (const d of dims) {
+    const p = pruebaDim(T, d);
+    if (!p) { lentas.push(d); continue; }
+    // Sin columna, todas las filas valen lo mismo: o pasan todas o ninguna.
+    if (!p.a) { if (!p.paso[0]) return vacio(); continue; }
+    pruebas.push(p);
+  }
+  const textos = q ? pruebaTexto(T, q) : null;
+  if (textos && !textos.length) return vacio();
+
+  const idx = M.rows.idx, n = M.rows.length;
+  const nd = pruebas.length, nt = textos ? textos.length : 0;
+  const out = new Int32Array(n);
+  let m = 0;
+  fila:
+  for (let k = 0; k < n; k++) {
+    const i = idx ? idx[k] : k;
+    for (let j = 0; j < nd; j++) { const p = pruebas[j]; if (!p.paso[p.a[i]]) continue fila; }
+    if (nt) {
+      let hay = false;
+      for (let j = 0; j < nt; j++) { const p = textos[j]; if (p.paso[p.a[i]]) { hay = true; break; } }
+      if (!hay) continue;
+    }
+    if (lentas.length) {
+      const r = T.fila(i);
+      for (const d of lentas) if (!S.f[d].has(val(r, d))) continue fila;
+    }
+    out[m++] = i;
+  }
+  return Filas(T, out.slice(0, m));
 }
 
 /* ---- rutas: el hash permite volver atrás desde un detalle ---- */
@@ -2634,8 +3176,11 @@ function seedCatalog() {
 /* ============================================================================
    10. MOTOR DE CUMPLIMIENTO
    ========================================================================== */
-const CMP = { rowState: new Map(), dev: new Map(), app: new Map(), tot: null, stale: new Set() };
+const CMP = { rowState: new Uint8Array(0), dev: new Map(), app: new Map(), tot: null, stale: new Set() };
 const EST_LAB = { ok: 'Cumple', warn: 'Requiere atención', bad: 'No cumple', na: 'No puntúa' };
+// El estado de cada fila cabe en un byte; estas dos tablas lo traducen.
+const EST_COD = { ok: 1, warn: 2, bad: 3, na: 4 };
+const EST_ORD = ['', 'Cumple', 'Requiere atención', 'No cumple', 'No puntúa'];
 /** Por que una aplicacion no puntua: sin regla, o con regla pero fuera del alcance. */
 function scopeNote(k) {
   if (!rule(k)) return 'sin-regla';
@@ -2679,24 +3224,36 @@ const worse = (a, b) => {
  * la version MAS ALTA que ese equipo tiene instalada de esa app.
  */
 function computeCompliance(rows) {
-  CMP.rowState = new Map(); CMP.dev = new Map(); CMP.app = new Map(); CMP.stale = new Set();
+  CMP.dev = new Map(); CMP.app = new Map(); CMP.stale = new Set();
   // Mapa anidado, no una clave de texto. Antes se construia una clave
   // «equipo + separador + appKey» por fila y luego se partia para recuperar las
   // dos mitades: con 280.000 filas es casi un millon de cadenas para nada.
   const best = new Map();                        // equipo -> Map(appKey -> version mas alta)
   const aggApp = new Map();                      // sin equipo: se pesan por recuento
+  // Todo fuera del bucle, como en aggregate: leer un campo es indexar dos
+  // arrays y no llamar a nada.
+  const T = rows.tabla;
+  const cD = T.crudo('device'), cK = T.crudo('appKey'), cV = T.crudo('ver');
+  const aD = cD.a, vD = cD.vals, aK = cK.a, vK = cK.vals, aV = cV.a, vV = cV.vals;
+  const dVUnk = T.derivado('ver', ES_VUNK);      // por version distinta, no por fila
+  const pesosC = T.pesos, diasC = T.dias;
+  const idxC = rows.idx, nC = rows.length;
   // Las dos condiciones son excluyentes, asi que una sola pasada basta.
-  for (const r of rows) {
-    if (!r.device) {
-      let a = aggApp.get(r.appKey);
-      if (!a) aggApp.set(r.appKey, a = { ok: 0, warn: 0, bad: 0, na: 0 });
-      a[evalVer(r.appKey, r.ver)] += (r.w || 1);
+  for (let k = 0; k < nC; k++) {
+    const i = idxC ? idxC[k] : k;
+    const device = aD ? vD[aD[i]] : '';
+    const key = aK ? vK[aK[i]] : '';
+    const ver = aV ? vV[aV[i]] : '';
+    if (!device) {
+      let a = aggApp.get(key);
+      if (!a) aggApp.set(key, a = { ok: 0, warn: 0, bad: 0, na: 0 });
+      a[evalVer(key, ver)] += pesosC[i];
       continue;
     }
-    let m = best.get(r.device);
-    if (!m) best.set(r.device, m = new Map());
-    const p = m.get(r.appKey);
-    if (p === undefined || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) m.set(r.appKey, r.ver);
+    let m = best.get(device);
+    if (!m) best.set(device, m = new Map());
+    const p = m.get(key);
+    if (p === undefined || (!dVUnk[aV ? aV[i] : 0] && verCmp(ver, p) > 0)) m.set(key, ver);
   }
   const pairApp = new Map();                     // appKey -> Map(equipo -> estado)
   best.forEach((m, dev) => {
@@ -2711,14 +3268,29 @@ function computeCompliance(rows) {
       am.set(dev, st);
     });
   });
-  // estado por fila, para poder filtrar por cumplimiento
-  for (const r of rows) {
-    const am = pairApp.get(r.appKey);
-    CMP.rowState.set(r, r.device
-      ? EST_LAB[(am && am.get(r.device)) || 'na']
-      : EST_LAB[evalVer(r.appKey, r.ver)]);
-    if (r.ts) { const d = CMP.dev.get(r.device); if (d && (!d.last || r.ts > d.last)) d.last = r.ts; }
+  // Estado por fila, para poder filtrar por cumplimiento. Va por INDICE de
+  // fila y en un array de bytes: con la tabla columnar cada recorrido crea
+  // objetos nuevos -una clave por objeto no se volveria a encontrar jamas- y
+  // un Map de 281.634 entradas son once megas para guardar cuatro estados.
+  CMP.rowState = new Uint8Array(T.length);
+  const ultimoDia = new Map();                   // equipo -> dia mas reciente
+  for (let k = 0; k < nC; k++) {
+    const i = idxC ? idxC[k] : k;
+    const device = aD ? vD[aD[i]] : '';
+    const key = aK ? vK[aK[i]] : '';
+    const am = pairApp.get(key);
+    CMP.rowState[i] = device
+      ? EST_COD[(am && am.get(device)) || 'na']
+      : EST_COD[evalVer(key, aV ? vV[aV[i]] : '')];
+    const dd = diasC[i];
+    if (dd >= 0 && device) {
+      const p = ultimoDia.get(device);
+      if (p === undefined || dd > p) ultimoDia.set(device, dd);
+    }
   }
+  // La fecha se ha llevado como numero de dia y se convierte una vez por
+  // equipo: 26.863 objetos Date en vez de uno por cada fila.
+  ultimoDia.forEach((dd, dev) => { const o = CMP.dev.get(dev); if (o) o.last = new Date(dd * DAY_MS); });
   // resumen por aplicacion: detalle y agregado suman en la misma ficha
   const claves = new Set(Array.from(pairApp.keys()).concat(Array.from(aggApp.keys())));
   claves.forEach(k => {
@@ -6283,7 +6855,7 @@ document.addEventListener('click', async e => {
     const v = el.getAttribute('data-rmsrc');
     if (v === 'todas') {
       if (!confirm('¿Quitar todos los archivos y volver a la pantalla inicial?')) return;
-      M.sources = []; mergeSources();
+      resetModel(); mergeSources();
       $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
       $('#fileInput').value = ''; return;
     }
@@ -6437,10 +7009,16 @@ async function doExport(kind) {
   if (kind === 'raw') {
     const q = v => { const s = v instanceof Date ? v.toISOString() : (v == null ? '' : String(v));
       return /[",;\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const head = M.headers.length ? M.headers : ['Equipo', 'Fabricante', 'Aplicación', 'Versión'];
-    const out = ['﻿' + head.map(q).join(';')];
-    for (const r of rows) out.push(M.headers.length ? head.map((_, i) => q(r._raw[i])).join(';')
-      : [r.device, r.vendor, r.app, r.ver].map(q).join(';'));
+    // Se exporta lo que el modelo sabe, no la fila original: guardar una copia
+    // del archivo de entrada por cada fila costaba mas memoria que todo lo demas
+    // junto, y esto ademas ya viene normalizado y agrupado.
+    const campos = [['Equipo', 'device'], ['Usuario', 'user'], ['Fabricante', 'vendor'],
+                    ['Aplicación', 'app'], ['Nombre original', 'appRaw'], ['Versión', 'ver'],
+                    ['Aprobada', 'aprob'], ['Sistema operativo', 'os'], ['Versión SO', 'osver'],
+                    ['Fin de soporte', 'eos'], ['Ubicación', 'geo'], ['Cliente', 'cliente'],
+                    ['Área', 'area'], ['Instalaciones', 'w']];
+    const out = ['﻿' + campos.map(c => q(c[0])).join(';')];
+    for (const r of rows) out.push(campos.map(c => q(r[c[1]])).join(';'));
     return saveFile(baseName() + '_seleccion.csv', out.join('\r\n'), 'text/csv;charset=utf-8;');
   }
   const sheets = exportSheets(rows, A);

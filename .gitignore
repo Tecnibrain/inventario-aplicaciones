@@ -9,6 +9,14 @@
 *.xlsm
 *.xltx
 *.xls
+
+# Parquet y DuckDB: son el mismo inventario, solo que comprimido. Un .parquet de
+# siete megas lleva dentro el millon y pico de filas del parque entero.
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.db
+
 *.json
 !package.json
 

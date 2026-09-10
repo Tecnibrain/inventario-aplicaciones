@@ -18,7 +18,9 @@ const S = {
 function val(r, dim) {
   switch (dim) {
     case 'cpeK':  return r.cpe ? 'Con CPE' : 'Sin CPE';
-    case 'cumpl': return CMP.rowState.get(r) || 'Sin estándar';
+    // el estado va por indice de fila, no por objeto: cada recorrido crea
+    // objetos nuevos y una clave por objeto no volveria a encontrarse nunca
+    case 'cumpl': return EST_ORD[CMP.rowState[r._i]] || 'Sin estándar';
     case 'cat':   return (rule(r.appKey) || {}).cat || 'Otro';
     case 'gestK': return (rule(r.appKey) || {}).gest ? 'Administrada' : 'No administrada';
     default:      return r[dim];
@@ -41,18 +43,107 @@ const activeDims = () => Object.keys(S.f);
    de M ni de CFG, que se serializan: un contador no tiene por que persistir. */
 let MODELO_V = 0, REGLAS_V = 0;
 
+/**
+ * Que valores de una dimension pasan el filtro, decidido UNA vez por valor.
+ *
+ * Devuelve `{paso, a}`: `a` es la columna de enteros de la fila y `paso` dice,
+ * para cada entero, si pasa. Filtrar una fila queda en `paso[a[i]]`. Casi todas
+ * las dimensiones salen de una columna -«cat» y «gestK» de appKey, «cpeK» de
+ * cpeRaw, «cumpl» del estado que ya esta calculado por fila-, y las que no,
+ * devuelven null para que se recorra a la antigua.
+ */
+function pruebaDim(T, dim) {
+  const permitidos = S.f[dim];
+  const porColumna = (campo, etiqueta) => {
+    const c = T.crudo(campo);
+    const paso = new Uint8Array(Math.max(1, c.vals.length));
+    for (let k = 0; k < paso.length; k++) paso[k] = permitidos.has(etiqueta(c.vals[k] || '')) ? 1 : 0;
+    return { paso, a: c.a };                     // `a` nulo: la columna no existe
+  };
+  switch (dim) {
+    case 'cpeK':  return porColumna('cpeRaw', s => ES_CPE(s) ? 'Con CPE' : 'Sin CPE');
+    case 'cat':   return porColumna('appKey', k => (rule(k) || {}).cat || 'Otro');
+    case 'gestK': return porColumna('appKey', k => (rule(k) || {}).gest ? 'Administrada' : 'No administrada');
+    case 'cumpl': {
+      const paso = new Uint8Array(EST_ORD.length);
+      for (let k = 0; k < paso.length; k++) paso[k] = permitidos.has(EST_ORD[k] || 'Sin estándar') ? 1 : 0;
+      const est = CMP.rowState.length >= T.length ? CMP.rowState : new Uint8Array(T.length);
+      return { paso, a: est };
+    }
+    case 'day': {
+      // El dia se guarda como numero; se etiqueta solo los que existen de
+      // verdad, que son unos pocos, y no los veinte mil del calendario.
+      const dias = T.dias, n = T.length;
+      let ultimo = 0;
+      for (let i = 0; i < n; i++) if (dias[i] > ultimo) ultimo = dias[i];
+      const paso = new Uint8Array(ultimo + 1);
+      const vistos = new Set();
+      for (let i = 0; i < n; i++) { const dd = dias[i]; if (dd >= 0) vistos.add(dd); }
+      vistos.forEach(dd => { if (permitidos.has(dayKey(new Date(dd * DAY_MS)))) paso[dd] = 1; });
+      return { paso, a: dias };
+    }
+    default:
+      if (!CAMPOS_TXT.includes(dim)) return null;   // dimension que no es columna
+      return porColumna(dim, s => s || DEFECTO[dim] || '');
+  }
+}
+
+/** Lo mismo para la busqueda de texto: se mira una vez por valor distinto en
+ *  cada campo buscable, y luego la fila solo consulta. */
+function pruebaTexto(T, q) {
+  const salida = [];
+  for (const campo of ['device', 'appKey', 'ver', 'geo', 'user', 'cliente']) {
+    const c = T.crudo(campo);
+    if (!c.a) continue;
+    const paso = new Uint8Array(c.vals.length);
+    for (let k = 0; k < paso.length; k++) {
+      const s = c.vals[k] || DEFECTO[campo] || '';
+      paso[k] = s && s.toLowerCase().includes(q) ? 1 : 0;
+    }
+    salida.push({ paso, a: c.a });
+  }
+  return salida;
+}
+
 function filterRows(exceptDim) {
   const dims = activeDims().filter(d => d !== exceptDim);
   const q = S.q.trim().toLowerCase();
   if (!dims.length && !q) return M.rows;
-  return M.rows.filter(r => {
-    for (const d of dims) if (!S.f[d].has(val(r, d))) return false;
-    if (q && !(r.device.toLowerCase().includes(q) || r.appKey.toLowerCase().includes(q) ||
-               r.ver.toLowerCase().includes(q) || (r.geo && r.geo.toLowerCase().includes(q)) ||
-               (r.user && r.user.toLowerCase().includes(q)) ||
-               (r.cliente && r.cliente.toLowerCase().includes(q)))) return false;
-    return true;
-  });
+
+  const T = M.tabla;
+  const vacio = () => Filas(T, new Int32Array(0));
+  const pruebas = [];
+  const lentas = [];
+  for (const d of dims) {
+    const p = pruebaDim(T, d);
+    if (!p) { lentas.push(d); continue; }
+    // Sin columna, todas las filas valen lo mismo: o pasan todas o ninguna.
+    if (!p.a) { if (!p.paso[0]) return vacio(); continue; }
+    pruebas.push(p);
+  }
+  const textos = q ? pruebaTexto(T, q) : null;
+  if (textos && !textos.length) return vacio();
+
+  const idx = M.rows.idx, n = M.rows.length;
+  const nd = pruebas.length, nt = textos ? textos.length : 0;
+  const out = new Int32Array(n);
+  let m = 0;
+  fila:
+  for (let k = 0; k < n; k++) {
+    const i = idx ? idx[k] : k;
+    for (let j = 0; j < nd; j++) { const p = pruebas[j]; if (!p.paso[p.a[i]]) continue fila; }
+    if (nt) {
+      let hay = false;
+      for (let j = 0; j < nt; j++) { const p = textos[j]; if (p.paso[p.a[i]]) { hay = true; break; } }
+      if (!hay) continue;
+    }
+    if (lentas.length) {
+      const r = T.fila(i);
+      for (const d of lentas) if (!S.f[d].has(val(r, d))) continue fila;
+    }
+    out[m++] = i;
+  }
+  return Filas(T, out.slice(0, m));
 }
 
 /* ---- rutas: el hash permite volver atrás desde un detalle ---- */
@@ -220,8 +311,11 @@ function seedCatalog() {
 /* ============================================================================
    10. MOTOR DE CUMPLIMIENTO
    ========================================================================== */
-const CMP = { rowState: new Map(), dev: new Map(), app: new Map(), tot: null, stale: new Set() };
+const CMP = { rowState: new Uint8Array(0), dev: new Map(), app: new Map(), tot: null, stale: new Set() };
 const EST_LAB = { ok: 'Cumple', warn: 'Requiere atención', bad: 'No cumple', na: 'No puntúa' };
+// El estado de cada fila cabe en un byte; estas dos tablas lo traducen.
+const EST_COD = { ok: 1, warn: 2, bad: 3, na: 4 };
+const EST_ORD = ['', 'Cumple', 'Requiere atención', 'No cumple', 'No puntúa'];
 /** Por que una aplicacion no puntua: sin regla, o con regla pero fuera del alcance. */
 function scopeNote(k) {
   if (!rule(k)) return 'sin-regla';
@@ -265,24 +359,36 @@ const worse = (a, b) => {
  * la version MAS ALTA que ese equipo tiene instalada de esa app.
  */
 function computeCompliance(rows) {
-  CMP.rowState = new Map(); CMP.dev = new Map(); CMP.app = new Map(); CMP.stale = new Set();
+  CMP.dev = new Map(); CMP.app = new Map(); CMP.stale = new Set();
   // Mapa anidado, no una clave de texto. Antes se construia una clave
   // «equipo + separador + appKey» por fila y luego se partia para recuperar las
   // dos mitades: con 280.000 filas es casi un millon de cadenas para nada.
   const best = new Map();                        // equipo -> Map(appKey -> version mas alta)
   const aggApp = new Map();                      // sin equipo: se pesan por recuento
+  // Todo fuera del bucle, como en aggregate: leer un campo es indexar dos
+  // arrays y no llamar a nada.
+  const T = rows.tabla;
+  const cD = T.crudo('device'), cK = T.crudo('appKey'), cV = T.crudo('ver');
+  const aD = cD.a, vD = cD.vals, aK = cK.a, vK = cK.vals, aV = cV.a, vV = cV.vals;
+  const dVUnk = T.derivado('ver', ES_VUNK);      // por version distinta, no por fila
+  const pesosC = T.pesos, diasC = T.dias;
+  const idxC = rows.idx, nC = rows.length;
   // Las dos condiciones son excluyentes, asi que una sola pasada basta.
-  for (const r of rows) {
-    if (!r.device) {
-      let a = aggApp.get(r.appKey);
-      if (!a) aggApp.set(r.appKey, a = { ok: 0, warn: 0, bad: 0, na: 0 });
-      a[evalVer(r.appKey, r.ver)] += (r.w || 1);
+  for (let k = 0; k < nC; k++) {
+    const i = idxC ? idxC[k] : k;
+    const device = aD ? vD[aD[i]] : '';
+    const key = aK ? vK[aK[i]] : '';
+    const ver = aV ? vV[aV[i]] : '';
+    if (!device) {
+      let a = aggApp.get(key);
+      if (!a) aggApp.set(key, a = { ok: 0, warn: 0, bad: 0, na: 0 });
+      a[evalVer(key, ver)] += pesosC[i];
       continue;
     }
-    let m = best.get(r.device);
-    if (!m) best.set(r.device, m = new Map());
-    const p = m.get(r.appKey);
-    if (p === undefined || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) m.set(r.appKey, r.ver);
+    let m = best.get(device);
+    if (!m) best.set(device, m = new Map());
+    const p = m.get(key);
+    if (p === undefined || (!dVUnk[aV ? aV[i] : 0] && verCmp(ver, p) > 0)) m.set(key, ver);
   }
   const pairApp = new Map();                     // appKey -> Map(equipo -> estado)
   best.forEach((m, dev) => {
@@ -297,14 +403,29 @@ function computeCompliance(rows) {
       am.set(dev, st);
     });
   });
-  // estado por fila, para poder filtrar por cumplimiento
-  for (const r of rows) {
-    const am = pairApp.get(r.appKey);
-    CMP.rowState.set(r, r.device
-      ? EST_LAB[(am && am.get(r.device)) || 'na']
-      : EST_LAB[evalVer(r.appKey, r.ver)]);
-    if (r.ts) { const d = CMP.dev.get(r.device); if (d && (!d.last || r.ts > d.last)) d.last = r.ts; }
+  // Estado por fila, para poder filtrar por cumplimiento. Va por INDICE de
+  // fila y en un array de bytes: con la tabla columnar cada recorrido crea
+  // objetos nuevos -una clave por objeto no se volveria a encontrar jamas- y
+  // un Map de 281.634 entradas son once megas para guardar cuatro estados.
+  CMP.rowState = new Uint8Array(T.length);
+  const ultimoDia = new Map();                   // equipo -> dia mas reciente
+  for (let k = 0; k < nC; k++) {
+    const i = idxC ? idxC[k] : k;
+    const device = aD ? vD[aD[i]] : '';
+    const key = aK ? vK[aK[i]] : '';
+    const am = pairApp.get(key);
+    CMP.rowState[i] = device
+      ? EST_COD[(am && am.get(device)) || 'na']
+      : EST_COD[evalVer(key, aV ? vV[aV[i]] : '')];
+    const dd = diasC[i];
+    if (dd >= 0 && device) {
+      const p = ultimoDia.get(device);
+      if (p === undefined || dd > p) ultimoDia.set(device, dd);
+    }
   }
+  // La fecha se ha llevado como numero de dia y se convierte una vez por
+  // equipo: 26.863 objetos Date en vez de uno por cada fila.
+  ultimoDia.forEach((dd, dev) => { const o = CMP.dev.get(dev); if (o) o.last = new Date(dd * DAY_MS); });
   // resumen por aplicacion: detalle y agregado suman en la misma ficha
   const claves = new Set(Array.from(pairApp.keys()).concat(Array.from(aggApp.keys())));
   claves.forEach(k => {

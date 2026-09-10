@@ -15,12 +15,18 @@
    de filas. El detalle se anade solo donde hace falta: las excepciones.
    ========================================================================== */
 const M = {
-  rows: [], devInfo: new Map(), sources: [], headers: [], cols: {},
+  tabla: null, rows: null, devInfo: new Map(), sources: [], headers: [], cols: {},
   fileName: '', sheet: '', mode: 'detalle',
   hasGeo: false, hasCliente: false, hasArea: false, hasTime: false, hasUser: false,
   hasEos: false, hasDetalle: false, hasAgregado: false,
   deviceApps: new Map(), latestVer: new Map(), maxDate: null, minDate: null
 };
+
+// El modelo arranca con una tabla vacia, no con un array suelto: asi todo lo que
+// recorre filas encuentra siempre la misma forma y no hay que distinguir casos.
+M.tabla = Tabla();
+M.rows = Filas(M.tabla, new Int32Array(0));
+
 
 /* Tramos del histograma de densidad de software por equipo. */
 const BUCKETS = [[1,10,'1–10'],[11,25,'11–25'],[26,40,'26–40'],[41,55,'41–55'],
@@ -85,6 +91,18 @@ function explicaCabeceras(headers, grid) {
  * Lee una cuadricula y la funde en el modelo. `reset` empieza de cero;
  * si no, acumula: asi se cargan parque + catalogo + excepciones por separado.
  */
+/**
+ * Empieza de cero. Vaciar `M.sources` no basta: las filas viven en la tabla
+ * columnar y se quedaban dentro aunque ya no las apuntase ninguna fuente, asi
+ * que importar un segundo archivo sin recargar la pagina arrastraba el primero.
+ */
+function resetModel() {
+  M.sources = [];
+  M.tabla = Tabla();
+  M.rows = Filas(M.tabla, new Int32Array(0));
+  M.devInfo = new Map();
+}
+
 function addSource(grid, fileName, sheet, reset) {
   const headers = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
   // Antes de detectar nada: si la cabecera llego entera en una sola columna, lo
@@ -95,10 +113,11 @@ function addSource(grid, fileName, sheet, reset) {
   const shape = shapeOf(cols);
   if (!shape) throw new Error(explicaCabeceras(headers, grid));
 
-  if (reset) M.sources = [];
+  if (reset) resetModel();
 
+  if (!M.tabla) M.tabla = Tabla();
   const g = (r, k) => cols[k] == null ? '' : (r[cols[k]] == null ? '' : r[cols[k]]);
-  const nuevas = [];
+  const nuevas = [];                     // indices en la tabla, no objetos
   // Cada fuente guarda sus propias filas y fichas de equipo. Asi retirar un
   // archivo cargado por error es rehacer la mezcla sin el, no deshacerla.
   const fichas = new Map();
@@ -157,29 +176,30 @@ function addSource(grid, fileName, sheet, reset) {
       app:     appGrp || app || '(sin nombre)',
       appRaw:  appRaw || '(sin nombre)',
       ver:     verUsable || '(sin versión)',
-      nVer,
       cpeRaw,
-      cpe:     !!cpeRaw && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(cpeRaw),
       os:      String(g(r, 'os')).trim(),
       osver:   String(g(r, 'osver')).trim() || '(sin versión)',
       geo:     String(g(r, 'geo')).trim(),
       cliente: String(g(r, 'cliente')).trim(),
       area:    String(g(r, 'area')).trim(),
-      eos, eosBad: /^(eos|endofsupport|fuera|expired|caducad|sin soporte|true|si|yes)/i.test(eos),
+      eos,
       aprob:   String(g(r, 'approved')).trim() || (nVer > 1 ? verFila : ''),
-      ts, day: dayKey(ts), _raw: r
+      ts
     };
     o.appKey = o.vendor + ' / ' + o.app;
-    nuevas.push(o);
+    // El objeto es de usar y tirar: la tabla se queda con los enteros.
+    nuevas.push(M.tabla.add(o));
   }
 
   if (!nuevas.length && shape !== 'parque')
     throw new Error('El archivo no contiene filas de datos por debajo de la cabecera.');
 
-  const truncado = detectaCorte(shape, grid.length - 1, nuevas, fichas.size);
+  const idx = Int32Array.from(nuevas);
+  const vista = Filas(M.tabla, idx);
+  const truncado = detectaCorte(shape, grid.length - 1, vista, fichas.size);
   M.sources.push({ name: fileName, sheet, shape, cols, headers, truncado,
-                   filas: nuevas.length || (grid.length - 1), equipos: fichas.size,
-                   rows: nuevas, devs: fichas });
+                   filas: idx.length || (grid.length - 1), equipos: fichas.size,
+                   rows: vista, idx, devs: fichas });
   mergeSources();
   return M.sources[M.sources.length - 1];
 }
@@ -196,7 +216,8 @@ function detectaSolape() {
   for (const s of M.sources) {
     const donde = s.shape === 'agregado' ? agg : s.shape === 'detalle' ? det : null;
     if (!donde) continue;
-    for (const r of s.rows) donde.add(r.appKey + String.fromCharCode(1) + r.ver);
+    const gK = M.tabla.acceso('appKey'), gV = M.tabla.acceso('ver');
+    s.rows.cada(i => donde.add(gK(i) + String.fromCharCode(1) + gV(i)));
   }
   let n = 0;
   agg.forEach(k => { if (det.has(k)) n++; });
@@ -216,36 +237,46 @@ function detectaSolape() {
  */
 function rellenaFabricante() {
   const conocido = new Map();               // nombre -> Map(fabricante -> peso)
-  for (const r of M.rows) {
-    if (r.vendor === '(sin fabricante)') continue;
-    let m = conocido.get(r.app);
-    if (!m) conocido.set(r.app, m = new Map());
-    m.set(r.vendor, (m.get(r.vendor) || 0) + (r.w || 1));
-  }
+  const T = M.tabla;
+  const gVen = T.acceso('vendor'), gApp = T.acceso('app');
+  M.rows.cada(i => {
+    const ven = gVen(i) || '(sin fabricante)';
+    if (ven === '(sin fabricante)') return;
+    const app = gApp(i);
+    let m = conocido.get(app);
+    if (!m) conocido.set(app, m = new Map());
+    m.set(ven, (m.get(ven) || 0) + T.peso(i));
+  });
   let n = 0;
-  for (const r of M.rows) {
-    if (r.vendor !== '(sin fabricante)') continue;
-    const m = conocido.get(r.app);
-    if (!m) continue;
+  M.rows.cada(i => {
+    if ((gVen(i) || '(sin fabricante)') !== '(sin fabricante)') return;
+    const app = gApp(i);
+    const m = conocido.get(app);
+    if (!m) return;
     let mejor = '', peso = -1;
     m.forEach((w, v) => { if (w > peso) { peso = w; mejor = v; } });
-    if (!mejor) continue;
-    r.vendor = mejor;
-    r.appKey = mejor + ' / ' + r.app;
+    if (!mejor) return;
+    T.poner('vendor', i, mejor);
+    T.poner('appKey', i, mejor + ' / ' + app);
     n++;
-  }
+  });
   return n;
 }
 
 /** Rehace el modelo a partir de las fuentes que queden. */
 function mergeSources() {
-  M.rows = [];
   M.devInfo = new Map();
   M.hasDetalle = false;
   M.hasAgregado = false;
   M.headers = [];
+  // Nada que copiar: se juntan los indices de cada fuente y ya.
+  let n = 0;
+  for (const s of M.sources) n += s.idx.length;
+  const todos = new Int32Array(n);
+  let k = 0;
+  for (const s of M.sources) { todos.set(s.idx, k); k += s.idx.length; }
+  M.rows = Filas(M.tabla || (M.tabla = Tabla()), todos);
   for (const s of M.sources) {
-    M.rows = M.rows.concat(s.rows);
     s.devs.forEach((d, k) => {
       let t = M.devInfo.get(k);
       if (!t) M.devInfo.set(k, t = { device: k });
@@ -281,8 +312,12 @@ function detectaCorte(shape, filas, nuevas, devs) {
   for (const t of TOPES) if (filas >= t * 0.995 && filas <= t) señales.push('el recuento (' + fmt(filas) + ') coincide con un tope de exportación habitual');
   if (shape === 'detalle' && nuevas.length > 200) {
     // si el corte cayo dentro de un equipo, el ultimo tendra muchas menos filas
+    // Por el ENTERO del equipo: materializar las filas como objetos solo para
+    // contarlas costaba mas que todo lo demas junto de esta comprobacion. El
+    // orden de insercion se respeta, que es de lo que depende «el ultimo».
     const porDev = new Map();
-    for (const r of nuevas) if (r.device) porDev.set(r.device, (porDev.get(r.device) || 0) + 1);
+    const aD = nuevas.tabla.crudo('device').a;
+    if (aD) nuevas.cada(i => { const dv = aD[i]; if (dv) porDev.set(dv, (porDev.get(dv) || 0) + 1); });
     const lista = Array.from(porDev.values());
     if (lista.length > 20) {
       const ord = lista.slice().sort((a, b) => a - b);
@@ -300,50 +335,120 @@ function recomputeModel() {
   const rows = M.rows;
   M.mode = M.hasDetalle && M.hasAgregado ? 'mixto' : M.hasAgregado ? 'agregado' : 'detalle';
 
-  // completar cada fila con la ficha del equipo, para que los filtros funcionen
-  for (const r of rows) {
-    if (!r.device) continue;
-    const d = M.devInfo.get(r.device);
-    if (!d) continue;
-    if (!r.user && d.user) r.user = d.user;
-    if ((!r.osver || r.osver === '(sin versión)') && d.osver) r.osver = d.osver;
-    if (!r.os && d.os) r.os = d.os;
-    if (!r.geo && d.geo) r.geo = d.geo;
-    if (!r.cliente && d.cliente) r.cliente = d.cliente;
-    if (!r.area && d.area) r.area = d.area;
-    if (!r.ts && d.ts) { r.ts = d.ts; r.day = dayKey(d.ts); }
+  // Completar cada fila con la ficha del equipo, para que los filtros
+  // funcionen. La ficha se busca por el ENTERO del equipo: una vez por equipo
+  // distinto -26.863- y no una por cada fila.
+  const T = M.tabla;
+  const idxR = rows.idx, nR = rows.length;
+  const cDevR = T.crudo('device'), aDevR = cDevR.a, vDevR = cDevR.vals;
+
+  if (M.devInfo.size && aDevR) {
+    const ficha = new Array(vDevR.length);
+    let alguna = false;
+    for (let k = 1; k < vDevR.length; k++) {
+      const f = M.devInfo.get(vDevR[k]);
+      if (f) { ficha[k] = f; alguna = true; }
+    }
+    if (alguna) {
+      const gUsrR = T.acceso('user'), gOsvR = T.acceso('osver'), gOsR = T.acceso('os');
+      const gGeoR = T.acceso('geo'), gCliR = T.acceso('cliente'), gAreR = T.acceso('area');
+      for (let k = 0; k < nR; k++) {
+        const i = idxR ? idxR[k] : k;
+        const d = ficha[aDevR[i]];
+        if (!d) continue;
+        if (!gUsrR(i) && d.user) T.poner('user', i, d.user);
+        const ov = gOsvR(i);
+        if ((!ov || ov === '(sin versión)') && d.osver) T.poner('osver', i, d.osver);
+        if (!gOsR(i) && d.os) T.poner('os', i, d.os);
+        if (!gGeoR(i) && d.geo) T.poner('geo', i, d.geo);
+        if (!gCliR(i) && d.cliente) T.poner('cliente', i, d.cliente);
+        if (!gAreR(i) && d.area) T.poner('area', i, d.area);
+        if (T.diaDe(i) < 0 && d.ts) T.ponerFecha(i, d.ts);
+      }
+    }
   }
 
-  // recuento de apps por equipo -> bucket del histograma (solo con detalle)
-  const dm = new Map();
-  for (const r of rows) if (r.device) {
-    let s = dm.get(r.device); if (!s) dm.set(r.device, s = new Set());
-    s.add(r.appKey);
+  // Recuento de apps por equipo -> bucket del histograma (solo con detalle).
+  // Se cuenta por entero y el bucket se resuelve una vez por equipo, no por
+  // fila: escribir la columna pasa a ser copiar un numero.
+  const cKeyR = T.crudo('appKey'), aKeyR = cKeyR.a, vKeyR = cKeyR.vals;
+  const porEquipo = new Map();
+  if (aDevR) for (let k = 0; k < nR; k++) {
+    const i = idxR ? idxR[k] : k;
+    const dv = aDevR[i];
+    if (!dv) continue;
+    let s = porEquipo.get(dv); if (!s) porEquipo.set(dv, s = new Set());
+    s.add(aKeyR ? aKeyR[i] : 0);
   }
-  const counts = new Map();
-  dm.forEach((s, d) => counts.set(d, s.size));
-  for (const r of rows) r.bucket = r.device ? bucketOf(counts.get(r.device) || 0) : '(agregado)';
+  const counts = new Map();                       // por nombre: lo lee el resto
+  const cuentaPorId = [];
+  porEquipo.forEach((s, dv) => { cuentaPorId[dv] = s.size; counts.set(vDevR[dv], s.size); });
 
-  // version de referencia: la mas alta vista en todas las fuentes
+  const idAgregado = T.idPara('bucket', '(agregado)');
+  const idBucket = [];                            // recuento -> entero del bucket
+  const bucketDeId = aDevR ? new Int32Array(vDevR.length) : null;
+  if (bucketDeId) for (let dv = 1; dv < vDevR.length; dv++) {
+    const c = cuentaPorId[dv] || 0;
+    let b = idBucket[c];
+    if (b === undefined) b = idBucket[c] = T.idPara('bucket', bucketOf(c));
+    bucketDeId[dv] = b;
+  }
+  const aBucR = T.crudo('bucket').a;
+  for (let k = 0; k < nR; k++) {
+    const i = idxR ? idxR[k] : k;
+    const dv = aDevR ? aDevR[i] : 0;
+    aBucR[i] = dv ? bucketDeId[dv] : idAgregado;
+  }
+
+  // Version de referencia: la mas alta vista en todas las fuentes. Solo depende
+  // de los pares (aplicacion, version) DISTINTOS, que son unos cientos. Se
+  // apuntan como un entero por fila -barato- y comparar versiones, que es lo
+  // caro, se hace una vez por par y no una por fila.
+  const cVerR = T.crudo('ver'), aVerR = cVerR.a, vVerR = cVerR.vals;
+  const dUnkR = T.derivado('ver', ES_VUNK);
+  const NK = Math.max(1, vKeyR.length);
+  const pares = new Set();
+  for (let k = 0; k < nR; k++) {
+    const i = idxR ? idxR[k] : k;
+    const vi = aVerR ? aVerR[i] : 0;
+    if (dUnkR[vi]) continue;
+    pares.add(vi * NK + (aKeyR ? aKeyR[i] : 0));
+  }
   const latestVer = new Map();
-  for (const r of rows) {
-    if (VER_UNK.test(r.ver)) continue;
-    const cur = latestVer.get(r.appKey);
-    if (cur === undefined || verCmp(r.ver, cur) > 0) latestVer.set(r.appKey, r.ver);
+  pares.forEach(par => {
+    const ver = vVerR[(par / NK) | 0] || '', key = vKeyR[par % NK] || '';
+    const cur = latestVer.get(key);
+    if (cur === undefined || verCmp(ver, cur) > 0) latestVer.set(key, ver);
+  });
+
+  // De las fechas solo hacen falta la primera y la ultima: no hay que juntar
+  // 281.634 en un array para luego mirar dos. Las filas se guardan por dia; las
+  // fichas de equipo conservan la hora, asi que se comparan aparte.
+  const diasR = T.dias;
+  let diaMin = Infinity, diaMax = -Infinity;
+  for (let k = 0; k < nR; k++) {
+    const d = diasR[idxR ? idxR[k] : k];
+    if (d < 0) continue;
+    if (d < diaMin) diaMin = d;
+    if (d > diaMax) diaMax = d;
   }
+  let tMin = Infinity, tMax = -Infinity;
+  M.devInfo.forEach(d => { if (d.ts) { const t = +d.ts; if (t < tMin) tMin = t; if (t > tMax) tMax = t; } });
+  if (diaMax >= 0) { tMin = Math.min(tMin, diaMin * DAY_MS); tMax = Math.max(tMax, diaMax * DAY_MS); }
+  const hayFecha = tMax > -Infinity;
 
-  const fechas = [];
-  for (const r of rows) if (r.ts) fechas.push(+r.ts);
-  M.devInfo.forEach(d => { if (d.ts) fechas.push(+d.ts); });
-
-  const tiene = k => rows.some(r => r[k]) || Array.from(M.devInfo.values()).some(d => d[k]);
+  // Que una columna EXISTA ya significa que alguna fila trajo algo: la tabla no
+  // crea columnas vacias. Preguntarlo asi cuesta nada; recorrer las filas para
+  // averiguarlo costaba una pasada entera por cada campo.
+  const enFichas = k => { for (const d of M.devInfo.values()) if (d[k]) return true; return false; };
+  const tiene = k => T.tiene(k) || enFichas(k);
   Object.assign(M, {
     deviceApps: counts, latestVer,
     hasGeo: tiene('geo'), hasCliente: tiene('cliente'), hasArea: tiene('area'),
-    hasUser: tiene('user'), hasEos: rows.some(r => r.eos),
-    hasTime: fechas.length > 0,
-    minDate: fechas.length ? new Date(vMin(fechas)) : null,
-    maxDate: fechas.length ? new Date(vMax(fechas)) : null
+    hasUser: tiene('user'), hasEos: T.tiene('eos'),
+    hasTime: hayFecha,
+    minDate: hayFecha ? new Date(tMin) : null,
+    maxDate: hayFecha ? new Date(tMax) : null
   });
   return M;
 }

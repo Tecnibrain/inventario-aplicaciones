@@ -20,43 +20,96 @@ const sizeDesc = m => Array.from(m.entries()).map(([k, s]) => [k, s.size]).sort(
 function aggregate(rows) {
   const A = {
     n: rows.length,
-    devSet: new CSet(), vendorDev: new Map(), appDev: new Map(), appVers: new Map(),
+    devSet: new Set(), vendorDev: new Map(), appDev: new Map(),
     appMeta: new Map(), appRaws: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
     appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
-    dayDev: new Map(), bucketDev: new Map(), devApps: new Map(), devLast: new Map(),
-    cpeYes: 0, cpeNo: 0, eosRows: 0, vendorRows: new Map(), userSet: new Set()
+    dayDev: new Map(), bucketDev: new Map(), devApps: new Map(),
+    cpeYes: 0, cpeNo: 0, eosRows: 0
   };
-  for (const r of rows) {
-    const w = r.w || 1;
-    if (r.device) A.devSet.add(r.device);
-    addTo(A.vendorDev, r.vendor, r.device, w);
-    inc(A.vendorRows, r.vendor, w);
-    addTo(A.appDev, r.appKey, r.device, w);
-    addTo(A.appVers, r.appKey, r.ver);
-    if (!A.appMeta.has(r.appKey)) A.appMeta.set(r.appKey, { vendor: r.vendor, app: r.app });
-    // los nombres tal y como venian, para poder enseñar que se ha agrupado
-    if (r.appRaw && r.appRaw !== r.app) {
-      let s = A.appRaws.get(r.appKey); if (!s) A.appRaws.set(r.appKey, s = new Set());
-      s.add(r.appRaw);
+
+  /* Dentro del bucle no se llama a nada y se agrupa por enteros siempre que se
+     puede. Con 281.634 filas, una llamada por campo son millones de llamadas y
+     cuestan mas que la lectura; y una clave de texto obliga a rehacer el hash
+     de la cadena en cada vuelta. Lo que se agrupa por entero recupera su nombre
+     al terminar, que son 160 aplicaciones y no 281.634 filas. */
+  const T = rows.tabla;
+  const par = c => { const x = T.crudo(c); return [x.a, x.vals]; };
+  const [aDev, vDev] = par('device'),  [aVen, vVen] = par('vendor');
+  const [aApp, vApp] = par('app'),     [aKey, vKey] = par('appKey');
+  const [aVer, vVer] = par('ver'),     [aRaw, vRaw] = par('appRaw');
+  const [aOsv, vOsv] = par('osver'),   [aGeo, vGeo] = par('geo');
+  const [aCli, vCli] = par('cliente'), [aAre, vAre] = par('area');
+  const [aBuc, vBuc] = par('bucket');
+  const aEos = T.crudo('eos').a, aCpe = T.crudo('cpeRaw').a;
+  const dEos = T.derivado('eos', ES_EOS), dCpe = T.derivado('cpeRaw', ES_CPE);
+  const pesos = T.pesos, dias = T.dias;
+  const idx = rows.idx, nFilas = rows.length;
+
+  for (let k = 0; k < nFilas; k++) {
+    const i = idx ? idx[k] : k;
+    const w = pesos[i];
+    const dv = aDev ? aDev[i] : 0;              // el entero del equipo
+    const ki = aKey ? aKey[i] : 0;              // el de la aplicacion
+    const device = dv ? vDev[dv] : '';
+    const key = vKey[ki] || '';
+    const ver = aVer ? vVer[aVer[i]] : '';
+    const osver = aOsv ? vOsv[aOsv[i]] : '';
+    const vendor = aVen ? vVen[aVen[i]] : '';
+
+    if (dv) A.devSet.add(dv);
+    addTo(A.vendorDev, vendor, device, w);
+    addTo(A.appDev, key, device, w);
+    if (!A.appMeta.has(ki)) A.appMeta.set(ki, { vendor, app: aApp ? vApp[aApp[i]] : '' });
+    // los nombres tal y como venian, para poder enseñar que se ha agrupado; el
+    // que coincide con el nombre agrupado se descarta al final, no aqui
+    if (aRaw) {
+      const ri = aRaw[i];
+      if (ri) { let s = A.appRaws.get(ki); if (!s) A.appRaws.set(ki, s = new Set()); s.add(ri); }
     }
-    if (r.device) addTo(A.devApps, r.device, r.appKey);
-    addTo(A.osDev, r.osver, r.device, w);
-    if (r.geo) addTo(A.geoDev, r.geo, r.device, w);
-    if (r.cliente) addTo(A.clienteDev, r.cliente, r.device, w);
-    if (r.area) addTo(A.areaDev, r.area, r.device, w);
-    if (r.day) addTo(A.dayDev, r.day, r.device, w);
-    addTo(A.bucketDev, r.bucket, r.device, w);
-    if (r.user) A.userSet.add(r.user);
-    if (r.eosBad) A.eosRows += w;
-    r.cpe ? A.cpeYes += w : A.cpeNo += w;
-    if (r.ts) { const p = A.devLast.get(r.device); if (!p || r.ts > p) A.devLast.set(r.device, r.ts); }
+    if (dv) { let s = A.devApps.get(dv); if (!s) A.devApps.set(dv, s = new Set()); s.add(ki); }
+    addTo(A.osDev, osver, device, w);
+    if (aGeo) { const g = vGeo[aGeo[i]]; if (g) addTo(A.geoDev, g, device, w); }
+    if (aCli) { const c = vCli[aCli[i]]; if (c) addTo(A.clienteDev, c, device, w); }
+    if (aAre) { const a = vAre[aAre[i]]; if (a) addTo(A.areaDev, a, device, w); }
+    const dd = dias[i];
+    if (dd >= 0) addTo(A.dayDev, dd, device, w);   // por numero; la etiqueta, al final
+    if (aBuc) addTo(A.bucketDev, vBuc[aBuc[i]], device, w);
+    if (aEos && dEos[aEos[i]]) A.eosRows += w;
+    (aCpe && dCpe[aCpe[i]]) ? A.cpeYes += w : A.cpeNo += w;
     // cobertura app x versionSO
-    let mm = A.verOsDev.get(r.appKey); if (!mm) A.verOsDev.set(r.appKey, mm = new Map());
-    addTo(mm, r.osver, r.device, w);
+    let mm = A.verOsDev.get(ki); if (!mm) A.verOsDev.set(ki, mm = new Map());
+    addTo(mm, osver, device, w);
     // reparto de versiones dentro de cada app
-    let vv = A.appVerDev.get(r.appKey); if (!vv) A.appVerDev.set(r.appKey, vv = new Map());
-    addTo(vv, r.ver, r.device, w);
+    let vv = A.appVerDev.get(ki); if (!vv) A.appVerDev.set(ki, vv = new Map());
+    addTo(vv, ver, device, w);
   }
+
+  /* --- se les devuelve el nombre a las claves que iban por entero --- */
+  const nombra = m => { const r = new Map(); m.forEach((v, ki) => r.set(vKey[ki] || '', v)); return r; };
+  A.appMeta = nombra(A.appMeta);
+  A.verOsDev = nombra(A.verOsDev);
+  A.appVerDev = nombra(A.appVerDev);
+  A.appRaws = (() => {
+    const r = new Map();
+    A.appRaws.forEach((s, ki) => {
+      const nombre = vKey[ki] || '', propio = (A.appMeta.get(nombre) || {}).app;
+      const t = new Set();
+      s.forEach(ri => { const x = vRaw[ri]; if (x && x !== propio) t.add(x); });
+      if (t.size) r.set(nombre, t);
+    });
+    return r;
+  })();
+  // El dia se acumulo por numero, que es una clave barata. Etiquetarlo ahora
+  // son unas decenas de entradas en vez de una por fila.
+  if (A.dayDev.size) {
+    const conFecha = new Map();
+    A.dayDev.forEach((s, dd) => conFecha.set(dayKey(new Date(dd * DAY_MS)), s));
+    A.dayDev = conFecha;
+  }
+  // Las versiones distintas por aplicacion son justo las claves del reparto:
+  // no hace falta un conjunto aparte que se rellene fila a fila.
+  A.appVers = A.appVerDev;
+
   A.nDev = A.devSet.size;
   A.nDevEstimado = false;
   // El archivo de parque es el censo: manda sobre los equipos que aparezcan en

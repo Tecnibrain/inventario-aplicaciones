@@ -382,7 +382,7 @@ document.addEventListener('click', async e => {
     const v = el.getAttribute('data-rmsrc');
     if (v === 'todas') {
       if (!confirm('¿Quitar todos los archivos y volver a la pantalla inicial?')) return;
-      M.sources = []; mergeSources();
+      resetModel(); mergeSources();
       $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
       $('#fileInput').value = ''; return;
     }
@@ -536,10 +536,16 @@ async function doExport(kind) {
   if (kind === 'raw') {
     const q = v => { const s = v instanceof Date ? v.toISOString() : (v == null ? '' : String(v));
       return /[",;\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const head = M.headers.length ? M.headers : ['Equipo', 'Fabricante', 'Aplicación', 'Versión'];
-    const out = ['﻿' + head.map(q).join(';')];
-    for (const r of rows) out.push(M.headers.length ? head.map((_, i) => q(r._raw[i])).join(';')
-      : [r.device, r.vendor, r.app, r.ver].map(q).join(';'));
+    // Se exporta lo que el modelo sabe, no la fila original: guardar una copia
+    // del archivo de entrada por cada fila costaba mas memoria que todo lo demas
+    // junto, y esto ademas ya viene normalizado y agrupado.
+    const campos = [['Equipo', 'device'], ['Usuario', 'user'], ['Fabricante', 'vendor'],
+                    ['Aplicación', 'app'], ['Nombre original', 'appRaw'], ['Versión', 'ver'],
+                    ['Aprobada', 'aprob'], ['Sistema operativo', 'os'], ['Versión SO', 'osver'],
+                    ['Fin de soporte', 'eos'], ['Ubicación', 'geo'], ['Cliente', 'cliente'],
+                    ['Área', 'area'], ['Instalaciones', 'w']];
+    const out = ['﻿' + campos.map(c => q(c[0])).join(';')];
+    for (const r of rows) out.push(campos.map(c => q(r[c[1]])).join(';'));
     return saveFile(baseName() + '_seleccion.csv', out.join('\r\n'), 'text/csv;charset=utf-8;');
   }
   const sheets = exportSheets(rows, A);
