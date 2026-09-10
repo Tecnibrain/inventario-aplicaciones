@@ -623,9 +623,13 @@ function pretty(s) {
   s = String(s == null ? '' : s).trim();
   if (!s) return '';
   if (s.includes(' / ')) return s.split(' / ').map(pretty).join(' / ');  // clave fabricante/app
-  if (!/[a-z]/.test(s) || /\s/.test(s)) return s;          // ya viene formateado
+  if (!/[a-záéíóúñ]/.test(s) || /\s/.test(s)) return s;    // ya viene formateado
+  // Solo la primera letra de cada palabra. Con `\b` se rompian los acentos:
+  // para el motor de expresiones la «á» de «Ofimática» no es caracter de
+  // palabra, asi que ponia mayuscula ahi Y en la letra siguiente, y salia
+  // «OfimÁTica» en el desplegable de categorias.
   return s.replace(/[_]+/g, ' ').replace(/\s+/g, ' ')
-    .replace(/\b([a-záéíóúñ])/g, m => m.toUpperCase());
+    .split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
 }
 /** Minimo y maximo sin difusion: `Math.min(...v)` pasa cada elemento como
  *  argumento y desborda la pila de llamadas a partir de unas decenas de miles. */
@@ -1034,7 +1038,61 @@ function baseApp(nombre) {
    importador veia «X - 1.2» y «X - 1.3» como dos aplicaciones distintas con una
    version cada una, ninguna estaba por detras de si misma, y no extraia un solo
    nombre de equipo. */
-const normVendor = v => (!v || VEN_UNK.test(v)) ? '(sin fabricante)' : v;
+/**
+ * El fabricante, legible y uno solo.
+ *
+ * Intune y Defender traen a veces el sujeto del certificado de firma en lugar
+ * del nombre: «CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond,
+ * S=Washington, C=US». Es el mismo fabricante que «Microsoft Corporation», pero
+ * como texto no lo es, asi que el mismo producto salia partido en dos y el
+ * desplegable se llenaba de lineas ilegibles. Del sujeto interesa el CN; si el
+ * CN resulta ser un identificador y no un nombre, sirve mejor la organizacion.
+ */
+function normVendor(v) {
+  let s = String(v == null ? '' : v).trim();
+  if (!s) return '(sin fabricante)';
+  if (/(?:^|,)\s*(?:CN|O)\s*=/i.test(s)) {
+    const cn = s.match(/(?:^|,)\s*CN\s*=\s*([^,]+)/i);
+    const or = s.match(/(?:^|,)\s*O\s*=\s*([^,]+)/i);
+    const nombre = cn ? cn[1].trim() : '';
+    const org = or ? or[1].trim() : '';
+    s = (/^[0-9a-f-]{16,}$/i.test(nombre) && org) ? org : (nombre || org || s);
+  }
+  return VEN_UNK.test(s) ? '(sin fabricante)' : s;
+}
+
+/* Las compilaciones de Windows y el nombre con el que se publican. */
+const WIN_REL = {
+  26200: 'Windows 11 25H2', 26100: 'Windows 11 24H2', 22631: 'Windows 11 23H2',
+  22621: 'Windows 11 22H2', 22000: 'Windows 11 21H2',
+  19045: 'Windows 10 22H2', 19044: 'Windows 10 21H2', 19043: 'Windows 10 21H1',
+  19042: 'Windows 10 20H2', 19041: 'Windows 10 2004', 18363: 'Windows 10 1909',
+  18362: 'Windows 10 1903', 17763: 'Windows 10 1809', 17134: 'Windows 10 1803',
+  16299: 'Windows 10 1709', 15063: 'Windows 10 1703', 14393: 'Windows 10 1607',
+  10586: 'Windows 10 1511', 10240: 'Windows 10 1507',
+  20348: 'Windows Server 2022', 25398: 'Windows Server 23H2'
+};
+
+/**
+ * La version de Windows con el nombre con el que se publica.
+ *
+ * Del inventario llega la compilacion entera -«10.0.26100.8655»-, y los ultimos
+ * digitos son el parche del mes: 205 valores distintos en este parque, que como
+ * filtro no sirve de nada. Los del medio SI son la version, y son once.
+ *
+ * Las compilaciones 14393 y 17763 las comparten Windows 10 y Windows Server; en
+ * un inventario de puestos son casi siempre el cliente, asi que se nombra ese.
+ * Lo que no sea una compilacion de Windows -macOS, Android- pasa tal cual.
+ */
+function soRelease(osver) {
+  const s = String(osver == null ? '' : osver).trim();
+  if (!s || s === '(sin versi\u00f3n)') return '(sin versi\u00f3n)';
+  const m = s.match(/^10\.0\.(\d{4,6})/);
+  if (!m) return s;
+  const b = +m[1];
+  return WIN_REL[b] || (b >= 22000 ? 'Windows 11 (compilaci\u00f3n ' + b + ')'
+                                   : 'Windows 10 (compilaci\u00f3n ' + b + ')');
+}
 const normApp = a => (CFG.params.agrupaVersion === false ? a : baseApp(a)) || a || '(sin nombre)';
 const claveApp = (v, a) => normVendor(v) + ' / ' + normApp(a);
 
@@ -1376,10 +1434,14 @@ function Tabla(guardado) {
      * sola si llegan valores nuevos mas tarde.
      */
     derivado(campo, fn) {
-      let t = derivados[campo];
+      // La clave lleva la funcion: de una misma columna se saca mas de una cosa
+      // -de `osver` salen la version de Windows y nada mas hoy, pero de `ver`
+      // salen dos-, y compartir cache seria devolver la tabla equivocada.
+      const clave = campo + '|' + (fn.name || '');
+      let t = derivados[clave];
       // El 0 es siempre la cadena vacia, tambien en una columna que nunca
       // llego a crearse: asi quien lea t[0] no se encuentra un hueco.
-      if (!t) { t = derivados[campo] = []; t[0] = fn(''); }
+      if (!t) { t = derivados[clave] = []; t[0] = fn(''); }
       const vals = dic[campo].vals;
       for (let k = t.length; k < vals.length; k++) t[k] = fn(vals[k]);
       return t;
@@ -2283,6 +2345,17 @@ async function importarGrande(file, opts, onProg) {
     return x;
   };
 
+  /* Y la clave completa, por el mismo motivo: limpiar el fabricante y agrupar el
+     nombre son media docena de expresiones regulares, y esto se llama una vez
+     por INSTALACION -cuatro millones y medio-. Pares distintos hay unos miles. */
+  const cacheClave = new Map();
+  const claveDe = (v, a) => {
+    const k = v + SEP1 + a;
+    let x = cacheClave.get(k);
+    if (x === undefined) cacheClave.set(k, x = claveApp(v, a));
+    return x;
+  };
+
   // El File es un puntero al archivo en disco, no una copia: guardarlo no cuesta
   // memoria y permite volver a recorrerlo despues para una aplicacion concreta.
   M.archivo = file;
@@ -2324,7 +2397,7 @@ async function importarGrande(file, opts, onProg) {
     // Toda instalacion entra en el indice, la vea el modelo o no: son tres
     // enteros, y es lo que permite decir despues en que equipos esta una
     // aplicacion sin volver a leer el archivo.
-    if (dev) indice.add(dev, claveApp(ven, app), ver);
+    if (dev) indice.add(dev, claveDe(ven, app), ver);
     const k = ven + SEP1 + app + SEP1 + ver;
     cuenta.set(k, (cuenta.get(k) || 0) + 1);
     const ka = ven + SEP1 + grupo(app);
@@ -2488,6 +2561,17 @@ async function importarParquet(file, opts, onProg) {
     return x;
   };
 
+  /* Y la clave completa, por el mismo motivo: limpiar el fabricante y agrupar el
+     nombre son media docena de expresiones regulares, y esto se llama una vez
+     por INSTALACION -cuatro millones y medio-. Pares distintos hay unos miles. */
+  const cacheClave = new Map();
+  const claveDe = (v, a) => {
+    const k = v + SEP1 + a;
+    let x = cacheClave.get(k);
+    if (x === undefined) cacheClave.set(k, x = claveApp(v, a));
+    return x;
+  };
+
   M.archivo = file;
   M.esParquet = true;       // con que lector se leyo, para poder repetirlo
   M.completo = completos.slice();
@@ -2562,7 +2646,7 @@ async function importarParquet(file, opts, onProg) {
     // Toda instalacion entra en el indice, la vea el modelo o no: son tres
     // enteros, y es lo que permite decir despues en que equipos esta una
     // aplicacion sin volver a leer el archivo.
-    if (dev) indice.add(dev, claveApp(ven, app), ver);
+    if (dev) indice.add(dev, claveDe(ven, app), ver);
     const k = ven + SEP1 + app + SEP1 + ver;
     cuenta.set(k, (cuenta.get(k) || 0) + 1);
     const ka = ven + SEP1 + grupo(app);
@@ -2697,7 +2781,7 @@ function aggregate(rows) {
     n: rows.length,
     devSet: new Set(), vendorDev: new Map(), appDev: new Map(),
     appMeta: new Map(), appRaws: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
-    appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
+    appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(), soRelDev: new Map(),
     dayDev: new Map(), bucketDev: new Map(), devApps: new Map(),
     cpeYes: 0, cpeNo: 0, eosRows: 0
   };
@@ -2717,6 +2801,10 @@ function aggregate(rows) {
   const [aBuc, vBuc] = par('bucket');
   const aEos = T.crudo('eos').a, aCpe = T.crudo('cpeRaw').a;
   const dEos = T.derivado('eos', ES_EOS), dCpe = T.derivado('cpeRaw', ES_CPE);
+  // La version de Windows solo depende del valor de la columna, asi que se
+  // resuelve una vez por compilacion distinta -205 en este parque- y no una vez
+  // por cada una del millon de filas.
+  const dSoRel = T.derivado('osver', soRelease);
   const pesos = T.pesos, dias = T.dias;
   const idx = rows.idx, nFilas = rows.length;
 
@@ -2743,6 +2831,12 @@ function aggregate(rows) {
     }
     if (dv) { let s = A.devApps.get(dv); if (!s) A.devApps.set(dv, s = new Set()); s.add(ki); }
     addTo(A.osDev, osver, device, w);
+    const soRel = aOsv ? dSoRel[aOsv[i]] : dSoRel[0];
+    // Solo las filas que nombran equipo. La version de Windows es del EQUIPO, y
+    // mezclar ahi el peso de las filas agregadas ponia «(sin version)» arriba
+    // del todo con 3,7 millones -que son instalaciones, no equipos- al lado de
+    // los 25.479 equipos de 24H2. Dos unidades en la misma lista.
+    if (device) addTo(A.soRelDev, soRel, device, w);
     if (aGeo) { const g = vGeo[aGeo[i]]; if (g) addTo(A.geoDev, g, device, w); }
     if (aCli) { const c = vCli[aCli[i]]; if (c) addTo(A.clienteDev, c, device, w); }
     if (aAre) { const a = vAre[aAre[i]]; if (a) addTo(A.areaDev, a, device, w); }
@@ -2751,9 +2845,10 @@ function aggregate(rows) {
     if (aBuc) addTo(A.bucketDev, vBuc[aBuc[i]], device, w);
     if (aEos && dEos[aEos[i]]) A.eosRows += w;
     (aCpe && dCpe[aCpe[i]]) ? A.cpeYes += w : A.cpeNo += w;
-    // cobertura app x versionSO
+    // cobertura app x version de Windows. Por VERSION y no por compilacion:
+    // un mapa de calor con seis parches del mismo 24H2 no dice nada.
     let mm = A.verOsDev.get(ki); if (!mm) A.verOsDev.set(ki, mm = new Map());
-    addTo(mm, osver, device, w);
+    addTo(mm, soRel, device, w);
     // reparto de versiones dentro de cada app
     let vv = A.appVerDev.get(ki); if (!vv) A.appVerDev.set(ki, vv = new Map());
     addTo(vv, ver, device, w);
@@ -2806,6 +2901,7 @@ function aggregate(rows) {
   A.topVendors = sizeDesc(A.vendorDev);
   A.topApps = sizeDesc(A.appDev);
   A.osList = sizeDesc(A.osDev);
+  A.soRelList = sizeDesc(A.soRelDev);
   A.geoList = sizeDesc(A.geoDev);
   A.frag = Array.from(A.appVers.entries())
     .map(([k, s]) => [k, s.size, (A.appDev.get(k) || new Set()).size])
@@ -3238,7 +3334,8 @@ function twin(heads, rows) {
    ========================================================================== */
 const DIMS = {
   device: 'Equipo', vendor: 'Fabricante', appKey: 'Aplicación', ver: 'Versión',
-  osver: 'Versión SO', cpeK: 'Trazabilidad CPE', geo: 'Ubicación', day: 'Fecha',
+  osver: 'Compilación de Windows', soRel: 'Versión de Windows',
+  cpeK: 'Trazabilidad CPE', geo: 'Ubicación', day: 'Fecha',
   bucket: 'Apps/equipo', cliente: 'Cliente', area: 'Área', cumpl: 'Cumplimiento',
   cat: 'Categoría', gestK: 'Administración'
 };
@@ -3255,6 +3352,7 @@ function val(r, dim) {
     // el estado va por indice de fila, no por objeto: cada recorrido crea
     // objetos nuevos y una clave por objeto no volveria a encontrarse nunca
     case 'cumpl': return EST_ORD[CMP.rowState[r._i]] || 'Sin estándar';
+    case 'soRel': return soRelease(r.osver);
     case 'cat':   return (rule(r.appKey) || {}).cat || 'Otro';
     case 'gestK': return (rule(r.appKey) || {}).gest ? 'Administrada' : 'No administrada';
     default:      return r[dim];
@@ -3296,6 +3394,7 @@ function pruebaDim(T, dim) {
   };
   switch (dim) {
     case 'cpeK':  return porColumna('cpeRaw', s => ES_CPE(s) ? 'Con CPE' : 'Sin CPE');
+    case 'soRel': return porColumna('osver', s => soRelease(s || '(sin versión)'));
     case 'cat':   return porColumna('appKey', k => (rule(k) || {}).cat || 'Otro');
     case 'gestK': return porColumna('appKey', k => (rule(k) || {}).gest ? 'Administrada' : 'No administrada');
     case 'cumpl': {
@@ -3326,7 +3425,9 @@ function pruebaDim(T, dim) {
  *  cada campo buscable, y luego la fila solo consulta. */
 function pruebaTexto(T, q) {
   const salida = [];
-  for (const campo of ['device', 'appKey', 'ver', 'geo', 'user', 'cliente']) {
+  // Tambien por el nombre tal y como venia y por el sistema: buscar «mspaint»
+  // o «macOS» tiene que encontrar algo aunque el nombre agrupado no lo lleve.
+  for (const campo of ['device', 'appKey', 'appRaw', 'ver', 'osver', 'os', 'geo', 'user', 'cliente']) {
     const c = T.crudo(campo);
     if (!c.a) continue;
     const paso = new Uint8Array(c.vals.length);
@@ -4086,10 +4187,11 @@ function vResumen(A, rows) {
         body: barH(topInst, { unit:'Equipos', W:560, labelW:210, trunc:32, aria:'Aplicaciones más desplegadas' }),
         table: twin(['Aplicación','Equipos'], A.topApps.slice(0,25).map(([k,v]) => [appLabel(k), fmt(v)])) }) +
       card({ title:'Parque por versión de sistema operativo', sub:'Las builds minoritarias suelen ser las primeras en quedarse sin soporte',
-        body: donut(A.osList.slice(0,6).map(([k,v]) => [k,v,'osver',k]),
+        body: donut((A.soRelList || A.osList).slice(0,6).map(([k,v]) => [k,v,'soRel',k]),
           { centerL:'Equipos', unit:'Equipos', aria:'Equipos por build de SO' }).svg,
-        extra: donut(A.osList.slice(0,6).map(([k,v]) => [k,v,'osver',k]), { unit:'Equipos' }).legend,
-        table: twin(['Versión SO','Equipos','%'], A.osList.map(([k,v]) => [k, fmt(v), fmt1(pct(v,A.nDev))+' %'])) }) +
+        extra: donut((A.soRelList || A.osList).slice(0,6).map(([k,v]) => [k,v,'soRel',k]), { unit:'Equipos' }).legend,
+        table: twin(['Versión de Windows','Equipos','%'],
+          (A.soRelList || A.osList).map(([k,v]) => [k, fmt(v), fmt1(pct(v,A.nDev))+' %'])) }) +
     `</div>`;
 }
 
@@ -4675,7 +4777,7 @@ function vMapas(A, rows) {
   const maxVer = Math.max(1, vMax(A.frag.map(f => f[1])));
   const tm = treemap(groups, { maxColor:maxVer, colorLabel:'Versiones distintas', aria:'Mapa de portafolio' });
 
-  const hmCols = A.osList.slice(0, 6).map(([k, v]) => ({ label:k, n:v, key:k }));
+  const hmCols = (A.soRelList || A.osList).slice(0, 6).map(([k, v]) => ({ label:k, n:v, key:k }));
   const hmRows = A.topApps.slice(0, 12).map(([k]) => ({ key:k, label: nameOfApp(k) }));
   const hmGet = (r, c) => {
     const m = A.verOsDev.get(r.key), a = m && m.get(c.key) ? m.get(c.key).size : 0;
@@ -6949,7 +7051,9 @@ function renderFilters() {
   if (M.hasArea) h += fsel('area', 'Área · todas', sizeDesc(F.areaDev).slice(0, 100));
   h += fsel('vendor', 'Fabricante · todos', F.topVendors.slice(0, 150));
   h += fsel('cat', 'Categoría · todas', Array.from(cats.entries()).sort((a, b) => b[1] - a[1]));
-  h += fsel('osver', 'Versión SO · todas', F.osList);
+  // Por VERSION, no por compilacion: el desplegable pasa de 205 opciones -una
+  // por parche mensual- a las once que la gente nombra.
+  h += fsel('soRel', 'Versión de Windows · todas', F.soRelList || []);
   h += fsel('cumpl', 'Cumplimiento · todo', [['Cumple', null], ['Requiere atención', null], ['No cumple', null], ['Sin estándar', null]]);
   if (M.hasGeo) h += fsel('geo', 'Ubicación · todas', F.geoList.slice(0, 100));
   $('#selHost').innerHTML = h;

@@ -164,7 +164,7 @@ function vMapas(A, rows) {
   const maxVer = Math.max(1, vMax(A.frag.map(f => f[1])));
   const tm = treemap(groups, { maxColor:maxVer, colorLabel:'Versiones distintas', aria:'Mapa de portafolio' });
 
-  const hmCols = A.osList.slice(0, 6).map(([k, v]) => ({ label:k, n:v, key:k }));
+  const hmCols = (A.soRelList || A.osList).slice(0, 6).map(([k, v]) => ({ label:k, n:v, key:k }));
   const hmRows = A.topApps.slice(0, 12).map(([k]) => ({ key:k, label: nameOfApp(k) }));
   const hmGet = (r, c) => {
     const m = A.verOsDev.get(r.key), a = m && m.get(c.key) ? m.get(c.key).size : 0;

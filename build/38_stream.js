@@ -153,6 +153,17 @@ async function importarGrande(file, opts, onProg) {
     return x;
   };
 
+  /* Y la clave completa, por el mismo motivo: limpiar el fabricante y agrupar el
+     nombre son media docena de expresiones regulares, y esto se llama una vez
+     por INSTALACION -cuatro millones y medio-. Pares distintos hay unos miles. */
+  const cacheClave = new Map();
+  const claveDe = (v, a) => {
+    const k = v + SEP1 + a;
+    let x = cacheClave.get(k);
+    if (x === undefined) cacheClave.set(k, x = claveApp(v, a));
+    return x;
+  };
+
   // El File es un puntero al archivo en disco, no una copia: guardarlo no cuesta
   // memoria y permite volver a recorrerlo despues para una aplicacion concreta.
   M.archivo = file;
@@ -194,7 +205,7 @@ async function importarGrande(file, opts, onProg) {
     // Toda instalacion entra en el indice, la vea el modelo o no: son tres
     // enteros, y es lo que permite decir despues en que equipos esta una
     // aplicacion sin volver a leer el archivo.
-    if (dev) indice.add(dev, claveApp(ven, app), ver);
+    if (dev) indice.add(dev, claveDe(ven, app), ver);
     const k = ven + SEP1 + app + SEP1 + ver;
     cuenta.set(k, (cuenta.get(k) || 0) + 1);
     const ka = ven + SEP1 + grupo(app);
@@ -358,6 +369,17 @@ async function importarParquet(file, opts, onProg) {
     return x;
   };
 
+  /* Y la clave completa, por el mismo motivo: limpiar el fabricante y agrupar el
+     nombre son media docena de expresiones regulares, y esto se llama una vez
+     por INSTALACION -cuatro millones y medio-. Pares distintos hay unos miles. */
+  const cacheClave = new Map();
+  const claveDe = (v, a) => {
+    const k = v + SEP1 + a;
+    let x = cacheClave.get(k);
+    if (x === undefined) cacheClave.set(k, x = claveApp(v, a));
+    return x;
+  };
+
   M.archivo = file;
   M.esParquet = true;       // con que lector se leyo, para poder repetirlo
   M.completo = completos.slice();
@@ -432,7 +454,7 @@ async function importarParquet(file, opts, onProg) {
     // Toda instalacion entra en el indice, la vea el modelo o no: son tres
     // enteros, y es lo que permite decir despues en que equipos esta una
     // aplicacion sin volver a leer el archivo.
-    if (dev) indice.add(dev, claveApp(ven, app), ver);
+    if (dev) indice.add(dev, claveDe(ven, app), ver);
     const k = ven + SEP1 + app + SEP1 + ver;
     cuenta.set(k, (cuenta.get(k) || 0) + 1);
     const ka = ven + SEP1 + grupo(app);

@@ -22,7 +22,7 @@ function aggregate(rows) {
     n: rows.length,
     devSet: new Set(), vendorDev: new Map(), appDev: new Map(),
     appMeta: new Map(), appRaws: new Map(), verOsDev: new Map(), osDev: new Map(), geoDev: new Map(),
-    appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(),
+    appVerDev: new Map(), clienteDev: new Map(), areaDev: new Map(), soRelDev: new Map(),
     dayDev: new Map(), bucketDev: new Map(), devApps: new Map(),
     cpeYes: 0, cpeNo: 0, eosRows: 0
   };
@@ -42,6 +42,10 @@ function aggregate(rows) {
   const [aBuc, vBuc] = par('bucket');
   const aEos = T.crudo('eos').a, aCpe = T.crudo('cpeRaw').a;
   const dEos = T.derivado('eos', ES_EOS), dCpe = T.derivado('cpeRaw', ES_CPE);
+  // La version de Windows solo depende del valor de la columna, asi que se
+  // resuelve una vez por compilacion distinta -205 en este parque- y no una vez
+  // por cada una del millon de filas.
+  const dSoRel = T.derivado('osver', soRelease);
   const pesos = T.pesos, dias = T.dias;
   const idx = rows.idx, nFilas = rows.length;
 
@@ -68,6 +72,12 @@ function aggregate(rows) {
     }
     if (dv) { let s = A.devApps.get(dv); if (!s) A.devApps.set(dv, s = new Set()); s.add(ki); }
     addTo(A.osDev, osver, device, w);
+    const soRel = aOsv ? dSoRel[aOsv[i]] : dSoRel[0];
+    // Solo las filas que nombran equipo. La version de Windows es del EQUIPO, y
+    // mezclar ahi el peso de las filas agregadas ponia «(sin version)» arriba
+    // del todo con 3,7 millones -que son instalaciones, no equipos- al lado de
+    // los 25.479 equipos de 24H2. Dos unidades en la misma lista.
+    if (device) addTo(A.soRelDev, soRel, device, w);
     if (aGeo) { const g = vGeo[aGeo[i]]; if (g) addTo(A.geoDev, g, device, w); }
     if (aCli) { const c = vCli[aCli[i]]; if (c) addTo(A.clienteDev, c, device, w); }
     if (aAre) { const a = vAre[aAre[i]]; if (a) addTo(A.areaDev, a, device, w); }
@@ -76,9 +86,10 @@ function aggregate(rows) {
     if (aBuc) addTo(A.bucketDev, vBuc[aBuc[i]], device, w);
     if (aEos && dEos[aEos[i]]) A.eosRows += w;
     (aCpe && dCpe[aCpe[i]]) ? A.cpeYes += w : A.cpeNo += w;
-    // cobertura app x versionSO
+    // cobertura app x version de Windows. Por VERSION y no por compilacion:
+    // un mapa de calor con seis parches del mismo 24H2 no dice nada.
     let mm = A.verOsDev.get(ki); if (!mm) A.verOsDev.set(ki, mm = new Map());
-    addTo(mm, osver, device, w);
+    addTo(mm, soRel, device, w);
     // reparto de versiones dentro de cada app
     let vv = A.appVerDev.get(ki); if (!vv) A.appVerDev.set(ki, vv = new Map());
     addTo(vv, ver, device, w);
@@ -131,6 +142,7 @@ function aggregate(rows) {
   A.topVendors = sizeDesc(A.vendorDev);
   A.topApps = sizeDesc(A.appDev);
   A.osList = sizeDesc(A.osDev);
+  A.soRelList = sizeDesc(A.soRelDev);
   A.geoList = sizeDesc(A.geoDev);
   A.frag = Array.from(A.appVers.entries())
     .map(([k, s]) => [k, s.size, (A.appDev.get(k) || new Set()).size])

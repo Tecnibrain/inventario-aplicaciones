@@ -227,10 +227,11 @@ function vResumen(A, rows) {
         body: barH(topInst, { unit:'Equipos', W:560, labelW:210, trunc:32, aria:'Aplicaciones más desplegadas' }),
         table: twin(['Aplicación','Equipos'], A.topApps.slice(0,25).map(([k,v]) => [appLabel(k), fmt(v)])) }) +
       card({ title:'Parque por versión de sistema operativo', sub:'Las builds minoritarias suelen ser las primeras en quedarse sin soporte',
-        body: donut(A.osList.slice(0,6).map(([k,v]) => [k,v,'osver',k]),
+        body: donut((A.soRelList || A.osList).slice(0,6).map(([k,v]) => [k,v,'soRel',k]),
           { centerL:'Equipos', unit:'Equipos', aria:'Equipos por build de SO' }).svg,
-        extra: donut(A.osList.slice(0,6).map(([k,v]) => [k,v,'osver',k]), { unit:'Equipos' }).legend,
-        table: twin(['Versión SO','Equipos','%'], A.osList.map(([k,v]) => [k, fmt(v), fmt1(pct(v,A.nDev))+' %'])) }) +
+        extra: donut((A.soRelList || A.osList).slice(0,6).map(([k,v]) => [k,v,'soRel',k]), { unit:'Equipos' }).legend,
+        table: twin(['Versión de Windows','Equipos','%'],
+          (A.soRelList || A.osList).map(([k,v]) => [k, fmt(v), fmt1(pct(v,A.nDev))+' %'])) }) +
     `</div>`;
 }
 

@@ -23,9 +23,13 @@ function pretty(s) {
   s = String(s == null ? '' : s).trim();
   if (!s) return '';
   if (s.includes(' / ')) return s.split(' / ').map(pretty).join(' / ');  // clave fabricante/app
-  if (!/[a-z]/.test(s) || /\s/.test(s)) return s;          // ya viene formateado
+  if (!/[a-záéíóúñ]/.test(s) || /\s/.test(s)) return s;    // ya viene formateado
+  // Solo la primera letra de cada palabra. Con `\b` se rompian los acentos:
+  // para el motor de expresiones la «á» de «Ofimática» no es caracter de
+  // palabra, asi que ponia mayuscula ahi Y en la letra siguiente, y salia
+  // «OfimÁTica» en el desplegable de categorias.
   return s.replace(/[_]+/g, ' ').replace(/\s+/g, ' ')
-    .replace(/\b([a-záéíóúñ])/g, m => m.toUpperCase());
+    .split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
 }
 /** Minimo y maximo sin difusion: `Math.min(...v)` pasa cada elemento como
  *  argumento y desborda la pila de llamadas a partir de unas decenas de miles. */
@@ -434,7 +438,61 @@ function baseApp(nombre) {
    importador veia «X - 1.2» y «X - 1.3» como dos aplicaciones distintas con una
    version cada una, ninguna estaba por detras de si misma, y no extraia un solo
    nombre de equipo. */
-const normVendor = v => (!v || VEN_UNK.test(v)) ? '(sin fabricante)' : v;
+/**
+ * El fabricante, legible y uno solo.
+ *
+ * Intune y Defender traen a veces el sujeto del certificado de firma en lugar
+ * del nombre: «CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond,
+ * S=Washington, C=US». Es el mismo fabricante que «Microsoft Corporation», pero
+ * como texto no lo es, asi que el mismo producto salia partido en dos y el
+ * desplegable se llenaba de lineas ilegibles. Del sujeto interesa el CN; si el
+ * CN resulta ser un identificador y no un nombre, sirve mejor la organizacion.
+ */
+function normVendor(v) {
+  let s = String(v == null ? '' : v).trim();
+  if (!s) return '(sin fabricante)';
+  if (/(?:^|,)\s*(?:CN|O)\s*=/i.test(s)) {
+    const cn = s.match(/(?:^|,)\s*CN\s*=\s*([^,]+)/i);
+    const or = s.match(/(?:^|,)\s*O\s*=\s*([^,]+)/i);
+    const nombre = cn ? cn[1].trim() : '';
+    const org = or ? or[1].trim() : '';
+    s = (/^[0-9a-f-]{16,}$/i.test(nombre) && org) ? org : (nombre || org || s);
+  }
+  return VEN_UNK.test(s) ? '(sin fabricante)' : s;
+}
+
+/* Las compilaciones de Windows y el nombre con el que se publican. */
+const WIN_REL = {
+  26200: 'Windows 11 25H2', 26100: 'Windows 11 24H2', 22631: 'Windows 11 23H2',
+  22621: 'Windows 11 22H2', 22000: 'Windows 11 21H2',
+  19045: 'Windows 10 22H2', 19044: 'Windows 10 21H2', 19043: 'Windows 10 21H1',
+  19042: 'Windows 10 20H2', 19041: 'Windows 10 2004', 18363: 'Windows 10 1909',
+  18362: 'Windows 10 1903', 17763: 'Windows 10 1809', 17134: 'Windows 10 1803',
+  16299: 'Windows 10 1709', 15063: 'Windows 10 1703', 14393: 'Windows 10 1607',
+  10586: 'Windows 10 1511', 10240: 'Windows 10 1507',
+  20348: 'Windows Server 2022', 25398: 'Windows Server 23H2'
+};
+
+/**
+ * La version de Windows con el nombre con el que se publica.
+ *
+ * Del inventario llega la compilacion entera -«10.0.26100.8655»-, y los ultimos
+ * digitos son el parche del mes: 205 valores distintos en este parque, que como
+ * filtro no sirve de nada. Los del medio SI son la version, y son once.
+ *
+ * Las compilaciones 14393 y 17763 las comparten Windows 10 y Windows Server; en
+ * un inventario de puestos son casi siempre el cliente, asi que se nombra ese.
+ * Lo que no sea una compilacion de Windows -macOS, Android- pasa tal cual.
+ */
+function soRelease(osver) {
+  const s = String(osver == null ? '' : osver).trim();
+  if (!s || s === '(sin versi\u00f3n)') return '(sin versi\u00f3n)';
+  const m = s.match(/^10\.0\.(\d{4,6})/);
+  if (!m) return s;
+  const b = +m[1];
+  return WIN_REL[b] || (b >= 22000 ? 'Windows 11 (compilaci\u00f3n ' + b + ')'
+                                   : 'Windows 10 (compilaci\u00f3n ' + b + ')');
+}
 const normApp = a => (CFG.params.agrupaVersion === false ? a : baseApp(a)) || a || '(sin nombre)';
 const claveApp = (v, a) => normVendor(v) + ' / ' + normApp(a);
 

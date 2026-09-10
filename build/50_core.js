@@ -4,7 +4,8 @@
    ========================================================================== */
 const DIMS = {
   device: 'Equipo', vendor: 'Fabricante', appKey: 'Aplicación', ver: 'Versión',
-  osver: 'Versión SO', cpeK: 'Trazabilidad CPE', geo: 'Ubicación', day: 'Fecha',
+  osver: 'Compilación de Windows', soRel: 'Versión de Windows',
+  cpeK: 'Trazabilidad CPE', geo: 'Ubicación', day: 'Fecha',
   bucket: 'Apps/equipo', cliente: 'Cliente', area: 'Área', cumpl: 'Cumplimiento',
   cat: 'Categoría', gestK: 'Administración'
 };
@@ -21,6 +22,7 @@ function val(r, dim) {
     // el estado va por indice de fila, no por objeto: cada recorrido crea
     // objetos nuevos y una clave por objeto no volveria a encontrarse nunca
     case 'cumpl': return EST_ORD[CMP.rowState[r._i]] || 'Sin estándar';
+    case 'soRel': return soRelease(r.osver);
     case 'cat':   return (rule(r.appKey) || {}).cat || 'Otro';
     case 'gestK': return (rule(r.appKey) || {}).gest ? 'Administrada' : 'No administrada';
     default:      return r[dim];
@@ -62,6 +64,7 @@ function pruebaDim(T, dim) {
   };
   switch (dim) {
     case 'cpeK':  return porColumna('cpeRaw', s => ES_CPE(s) ? 'Con CPE' : 'Sin CPE');
+    case 'soRel': return porColumna('osver', s => soRelease(s || '(sin versión)'));
     case 'cat':   return porColumna('appKey', k => (rule(k) || {}).cat || 'Otro');
     case 'gestK': return porColumna('appKey', k => (rule(k) || {}).gest ? 'Administrada' : 'No administrada');
     case 'cumpl': {
@@ -92,7 +95,9 @@ function pruebaDim(T, dim) {
  *  cada campo buscable, y luego la fila solo consulta. */
 function pruebaTexto(T, q) {
   const salida = [];
-  for (const campo of ['device', 'appKey', 'ver', 'geo', 'user', 'cliente']) {
+  // Tambien por el nombre tal y como venia y por el sistema: buscar «mspaint»
+  // o «macOS» tiene que encontrar algo aunque el nombre agrupado no lo lleve.
+  for (const campo of ['device', 'appKey', 'appRaw', 'ver', 'osver', 'os', 'geo', 'user', 'cliente']) {
     const c = T.crudo(campo);
     if (!c.a) continue;
     const paso = new Uint8Array(c.vals.length);

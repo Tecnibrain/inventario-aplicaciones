@@ -294,10 +294,14 @@ function Tabla(guardado) {
      * sola si llegan valores nuevos mas tarde.
      */
     derivado(campo, fn) {
-      let t = derivados[campo];
+      // La clave lleva la funcion: de una misma columna se saca mas de una cosa
+      // -de `osver` salen la version de Windows y nada mas hoy, pero de `ver`
+      // salen dos-, y compartir cache seria devolver la tabla equivocada.
+      const clave = campo + '|' + (fn.name || '');
+      let t = derivados[clave];
       // El 0 es siempre la cadena vacia, tambien en una columna que nunca
       // llego a crearse: asi quien lea t[0] no se encuentra un hueco.
-      if (!t) { t = derivados[campo] = []; t[0] = fn(''); }
+      if (!t) { t = derivados[clave] = []; t[0] = fn(''); }
       const vals = dic[campo].vals;
       for (let k = t.length; k < vals.length; k++) t[k] = fn(vals[k]);
       return t;

@@ -38,7 +38,9 @@ function renderFilters() {
   if (M.hasArea) h += fsel('area', 'Área · todas', sizeDesc(F.areaDev).slice(0, 100));
   h += fsel('vendor', 'Fabricante · todos', F.topVendors.slice(0, 150));
   h += fsel('cat', 'Categoría · todas', Array.from(cats.entries()).sort((a, b) => b[1] - a[1]));
-  h += fsel('osver', 'Versión SO · todas', F.osList);
+  // Por VERSION, no por compilacion: el desplegable pasa de 205 opciones -una
+  // por parche mensual- a las once que la gente nombra.
+  h += fsel('soRel', 'Versión de Windows · todas', F.soRelList || []);
   h += fsel('cumpl', 'Cumplimiento · todo', [['Cumple', null], ['Requiere atención', null], ['No cumple', null], ['Sin estándar', null]]);
   if (M.hasGeo) h += fsel('geo', 'Ubicación · todas', F.geoList.slice(0, 100));
   $('#selHost').innerHTML = h;
