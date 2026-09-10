@@ -230,22 +230,43 @@ function guessCat(key) {
  */
 function effVersions(rows) {
   // appKey -> { dev: Map(equipo -> version), agg: Map(version -> peso) }
-  const out = new Map();
-  for (const r of rows) {
-    let e = out.get(r.appKey);
-    if (!e) out.set(r.appKey, e = { dev: new Map(), agg: new Map() });
-    if (!r.device) {
-      // Una fila agregada vale por r.w equipos, y hay que contarla como tal.
-      // Indexada por equipo caia bajo la clave '' junto con todas las demas, se
-      // pisaban entre si y la aplicacion entera contaba como UN equipo: el
-      // percentil no llegaba nunca al 50 % y el estandar se sembraba en la
-      // version mas antigua, con lo que todo el parque salia cumpliendo.
-      if (!VER_UNK.test(r.ver)) e.agg.set(r.ver, (e.agg.get(r.ver) || 0) + (r.w || 1));
+  //
+  // Como en aggregate: se agrupa por el ENTERO del diccionario y se le pone
+  // nombre al final. El equipo se queda como entero para siempre, porque de
+  // este mapa solo se leen los VALORES -que version tiene cada uno- y nunca los
+  // nombres. Recorrerlo construyendo el objeto de cada fila costaba 2,8 s con un
+  // millon de filas, mas que agregar.
+  const T = rows.tabla;
+  const cK = T.crudo('appKey'), aK = cK.a, vK = cK.vals;
+  const cD = T.crudo('device'), aD = cD.a;
+  const cV = T.crudo('ver'),    aV = cV.a, vV = cV.vals;
+  const dUnk = T.derivado('ver', ES_VUNK);
+  const pesos = T.pesos;
+  const idx = rows.idx, n = rows.length;
+  const porId = new Map();
+
+  for (let k = 0; k < n; k++) {
+    const i = idx ? idx[k] : k;
+    const ki = aK ? aK[i] : 0;
+    let e = porId.get(ki);
+    if (!e) porId.set(ki, e = { dev: new Map(), agg: new Map() });
+    const vi = aV ? aV[i] : 0;
+    const ver = vV[vi] || '';
+    const dv = aD ? aD[i] : 0;
+    if (!dv) {
+      // Una fila agregada vale por su peso en equipos, y hay que contarla como
+      // tal. Indexada por equipo caia bajo la clave '' junto con todas las
+      // demas, se pisaban entre si y la aplicacion entera contaba como UN
+      // equipo: el percentil no llegaba nunca al 50 % y el estandar se sembraba
+      // en la version mas antigua, con lo que todo el parque salia cumpliendo.
+      if (!dUnk[vi]) e.agg.set(ver, (e.agg.get(ver) || 0) + pesos[i]);
       continue;
     }
-    const p = e.dev.get(r.device);
-    if (p === undefined || (!VER_UNK.test(r.ver) && verCmp(r.ver, p) > 0)) e.dev.set(r.device, r.ver);
+    const p = e.dev.get(dv);
+    if (p === undefined || (!dUnk[vi] && verCmp(ver, p) > 0)) e.dev.set(dv, ver);
   }
+  const out = new Map();
+  porId.forEach((e, ki) => out.set(vK[ki] || '', e));
   return out;
 }
 /** Reparto de equipos por version efectiva, de la mas nueva a la mas antigua. */

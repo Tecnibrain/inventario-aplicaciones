@@ -117,7 +117,10 @@ function Tabla(guardado) {
         }
         col[c].push(dic[c].id(v));
       }
-      w.push(o.w == null ? 1 : o.w);
+      // Un peso que no sea un numero positivo cuenta como uno. Antes cada
+      // lector lo arreglaba por su cuenta con `r.w || 1`; asi lo hace la tabla
+      // una vez y todos leen lo mismo.
+      w.push(o.w > 0 ? o.w : 1);
       dia.push(o.ts instanceof Date && !isNaN(o.ts) ? Math.floor(o.ts.getTime() / DAY_MS) : -1);
       return n++;                          // el indice de la fila recien anadida
     },
