@@ -571,21 +571,10 @@ async function doExport(kind) {
 
 /* ---- acciones de la conexión con Defender ---- */
 async function gxAction(a) {
-  if (a === 'duck') {
-    return saveFile('preparar-duckdb.ps1', scriptDuck(), 'text/plain;charset=utf-8');
-  }
-  if (a === 'resumir') {
-    return saveFile('resumir-detalle.ps1', scriptResumir(), 'text/plain;charset=utf-8');
-  }
-  if (a === 'intune') {
-    const opts = { parque: !!($('#inParque') || {}).checked,
-                   catalogo: !!($('#inCatalogo') || {}).checked,
-                   detalle: !!($('#inDetalle') || {}).checked,
-                   filtro: (($('#inFiltro') || {}).value || '').trim() };
-    if (!opts.parque && !opts.catalogo && !opts.detalle) { toast('Marca al menos un informe'); return; }
-    const modo = ($('#inModo') || {}).value || 'aplicacion';
-    return saveFile('extraer-intune.ps1', scriptIntune(opts, modo), 'text/plain;charset=utf-8');
-  }
+  if (a !== 'intune') return;
+  const opts = { detalle: true, filtro: (($('#inFiltro') || {}).value || '').trim() };
+  const modo = ($('#inModo') || {}).value || 'aplicacion';
+  return saveFile('inventario.ps1', scriptIntune(opts, modo), 'text/plain;charset=utf-8');
 }
 
 /* ---- acciones de administración ---- */
@@ -816,8 +805,7 @@ function irADatos(ancla) {
     else window.scrollTo({ top: 0 });
   }, 280);
 }
-$('#btnConsultas').addEventListener('click', () => irADatos('anclaConsultas'));
-$('#btnConectar').addEventListener('click', () => irADatos('anclaConexion'));
+$('#btnScript').addEventListener('click', () => irADatos('anclaScript'));
 
 /* arranque */
 cfgLoad(); histLoad();
