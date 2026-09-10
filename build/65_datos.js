@@ -1781,7 +1781,8 @@ function vDatos(A, rows) {
   const copia = GUARDADO ? `<div class="banner" style="margin:12px 0 0">${ico('shield')}<div>
       <b>Hay una copia guardada en este equipo</b>, así que el tablero abre con los datos
       puestos sin volver a traer el archivo.
-      ${esc(GUARDADO.archivo || '')} · ${fmt(GUARDADO.filas)} filas ·
+      ${esc(GUARDADO.archivo || '')} · ${fmt(GUARDADO.filas)} filas del modelo${
+        GUARDADO.instalaciones ? ` · ${fmt(GUARDADO.instalaciones)} instalaciones indexadas` : ''} ·
       ${GUARDADO.bytes ? (GUARDADO.bytes / 1048576).toFixed(1) + ' MB' : ''} ·
       guardada el ${GUARDADO.guardado ? new Date(GUARDADO.guardado).toLocaleString('es-CO') : '—'}.
       <span class="mini" style="display:block;margin-top:4px">Vive en el almacen del navegador de esta

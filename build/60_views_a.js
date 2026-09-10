@@ -418,11 +418,23 @@ function vApp(A, rows, key) {
     const p = devVer.get(x.device);
     if (!p || (!VER_UNK.test(x.ver) && verCmp(x.ver, p) > 0)) devVer.set(x.device, x.ver);
   }
-  const devTbl = Array.from(devVer.entries()).map(([d, v]) => ({
-    dev:d, ver:v, estado: evalVer(key, v), user: (rowsApp.find(x => x.device === d) || {}).user || '',
-    osver: (rowsApp.find(x => x.device === d) || {}).osver || '',
-    last: (CMP.dev.get(d) || {}).last || null
-  }));
+  // El modelo solo nombra equipos de lo que va POR DETRAS del estandar, asi que
+  // una aplicacion con todo el parque en la misma version no nombraba ninguno.
+  // El indice de instalaciones los tiene todos: sin filtro puesto se completa
+  // desde ahi, y no hay que releer el archivo. Con filtro no se toca, porque la
+  // tabla tiene que responder a lo que el filtro dice.
+  const filtrando = activeDims().length > 0 || !!S.q.trim();
+  const delIndice = !filtrando && M.indice && devVer.size < total;
+  if (delIndice) M.indice.equiposDe(key).forEach((v, d) => { if (!devVer.has(d)) devVer.set(d, v); });
+
+  // El usuario y la version de SO son del EQUIPO, no de la fila: se sacan de su
+  // ficha. Antes se buscaban recorriendo las filas por cada equipo, que con unos
+  // miles de ellos es un cuadrado.
+  const devTbl = Array.from(devVer.entries()).map(([d, v]) => {
+    const f = M.devInfo.get(d) || {};
+    return { dev:d, ver:v, estado: evalVer(key, v), user: f.user || '', osver: f.osver || '',
+             last: (CMP.dev.get(d) || {}).last || null };
+  });
   // evolucion en el histórico
   const hs = HIST.filter(h => h.apps && h.apps[key]);
   const eco = hs.length > 1 ? trendMulti(hs.map(h => h.fecha),
@@ -499,7 +511,8 @@ function vApp(A, rows, key) {
       sub: devTbl.length < total
         ? `${fmt(devTbl.length)} de ${fmt(total)} equipos, los que se conoce el nombre. ` +
           `El resto viene de un catálogo agregado, que cuenta cuántos hay en cada versión pero no cuáles`
-        : `${fmt(devTbl.length)} equipos`,
+        : `${fmt(devTbl.length)} equipos` +
+          (delIndice ? ' · nombres tomados del inventario completo, no de la selección' : ''),
       data: devTbl, sort:{ k:'estado', d:1 },
       rowAttr: x => `data-godev="${esc(x.dev)}"`,
       cols:[{ k:'dev', l:'Equipo', cls:'name' }, { k:'user', l:'Usuario' },

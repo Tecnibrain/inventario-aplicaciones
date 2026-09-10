@@ -429,6 +429,15 @@ function baseApp(nombre) {
 /* ============================================================================
    3. DETECCION DE COLUMNAS  ·  ingles + espanol
    ========================================================================== */
+/* Como se nombra una aplicacion, en un solo sitio.
+   El importador y el modelo TIENEN que coincidir: cuando no coincidian, el
+   importador veia «X - 1.2» y «X - 1.3» como dos aplicaciones distintas con una
+   version cada una, ninguna estaba por detras de si misma, y no extraia un solo
+   nombre de equipo. */
+const normVendor = v => (!v || VEN_UNK.test(v)) ? '(sin fabricante)' : v;
+const normApp = a => (CFG.params.agrupaVersion === false ? a : baseApp(a)) || a || '(sin nombre)';
+const claveApp = (v, a) => normVendor(v) + ' / ' + normApp(a);
+
 const ROLES = [
   ['count',  ['equipos','dispositivos','devicecount','devicecounts','numerodispositivos',
               'numeroequipos','recuento','cantidadequipos','totalequipos','nodevices','noofdevices',

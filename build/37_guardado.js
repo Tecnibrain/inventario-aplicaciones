@@ -69,6 +69,9 @@ function paqueteModelo() {
     esParquet: !!M.esParquet,
     completo: M.completo || [],
     tabla: M.tabla.volcado(),
+    // El indice va con la copia: sin el habria que releer el archivo entero
+    // para volver a saber en que equipos esta cada aplicacion.
+    indice: M.indice ? M.indice.volcado() : null,
     // El archivo original NO se guarda: son los mismos cientos de megas otra
     // vez, y para abrir el tablero no hace falta.
     fuentes: M.sources.map(s => ({
@@ -85,7 +88,9 @@ async function guardarModelo() {
   const ficha = {
     archivo: p.archivo, guardado: p.guardado, filas: p.tabla.n,
     equipos: M.devInfo ? M.devInfo.size : 0,
-    fuentes: p.fuentes.map(f => f.name), bytes: M.tabla.bytes()
+    instalaciones: M.indice ? M.indice.length : 0,
+    fuentes: p.fuentes.map(f => f.name),
+    bytes: M.tabla.bytes() + (M.indice ? M.indice.bytes() : 0)
   };
   await operaBD('readwrite', st => { st.put(p, BD_MODELO); return st.put(ficha, BD_FICHA); });
   GUARDADO = ficha;
@@ -100,6 +105,7 @@ async function restaurarModelo() {
   // archivo, que es mucho mejor que enseñar numeros a medias.
   if (p.v !== 1) { await olvidarModelo(); return null; }
   M.tabla = Tabla(p.tabla);
+  M.indice = p.indice ? Indice(p.indice) : null;
   M.sources = p.fuentes.map(s => Object.assign({}, s, { rows: Filas(M.tabla, s.idx) }));
   M.completo = p.completo || [];
   M.esParquet = !!p.esParquet;
@@ -110,7 +116,8 @@ async function restaurarModelo() {
   M.effVer = effVersions(M.rows);
   GUARDADO = { archivo: p.archivo, guardado: p.guardado, filas: p.tabla.n,
                equipos: M.devInfo.size, fuentes: p.fuentes.map(f => f.name),
-               bytes: M.tabla.bytes() };
+               instalaciones: M.indice ? M.indice.length : 0,
+               bytes: M.tabla.bytes() + (M.indice ? M.indice.bytes() : 0) };
   return GUARDADO;
 }
 

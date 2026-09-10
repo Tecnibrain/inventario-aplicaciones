@@ -21,6 +21,9 @@ const M = {
   // que lector se leyo: releer un Parquet como texto revienta. `archivoNombre`
   // es solo el nombre, que es lo que sobrevive a la copia guardada.
   archivo: null, esParquet: false, archivoNombre: '', completo: [],
+  // Todas las instalaciones, aparte del modelo: para poder decir en QUE equipos
+  // esta una aplicacion sin cargar millones de filas en el tablero.
+  indice: null,
   hasGeo: false, hasCliente: false, hasArea: false, hasTime: false, hasUser: false,
   hasEos: false, hasDetalle: false, hasAgregado: false,
   deviceApps: new Map(), latestVer: new Map(), maxDate: null, minDate: null
@@ -105,6 +108,8 @@ function resetModel() {
   M.tabla = Tabla();
   M.rows = Filas(M.tabla, new Int32Array(0));
   M.devInfo = new Map();
+  // El indice NO se borra aqui: los importadores lo llenan antes de montar el
+  // modelo, y esto se llama a mitad de camino. Se limpia al quitar todo.
   // El archivo de origen NO se toca aqui: los importadores lo anotan antes de
   // empezar y llaman a esto a mitad de camino. Se limpia al quitar todo.
 }
@@ -112,6 +117,7 @@ function resetModel() {
 /** Olvida tambien de donde venia. Esto es «quitar todos los archivos». */
 function resetOrigen() {
   M.archivo = null; M.archivoNombre = ''; M.esParquet = false; M.completo = [];
+  M.indice = null;
 }
 
 function addSource(grid, fileName, sheet, reset) {
@@ -168,7 +174,9 @@ function addSource(grid, fileName, sheet, reset) {
     }
     // El nombre tal cual se conserva: agrupar no es perder.
     const appRaw = app;
-    const appGrp = CFG.params.agrupaVersion === false ? app : baseApp(app);
+    // Los mismos que usa el importador, y a proposito: cuando cada uno
+    // agrupaba por su cuenta, el importador no extraia un solo nombre de equipo.
+    const appGrp = normApp(app);
     // Una fila que resume una aplicacion entera trae cuantas versiones conviven.
     // Si son varias, la version de la fila es solo la mas alta y no representa a
     // los equipos que cuenta: darla por buena para todos inflaria el
@@ -183,8 +191,8 @@ function addSource(grid, fileName, sheet, reset) {
     const o = {
       device, w,
       user:    device ? '' : '',
-      vendor:  (!vendor || VEN_UNK.test(vendor)) ? '(sin fabricante)' : vendor,
-      app:     appGrp || app || '(sin nombre)',
+      vendor:  normVendor(vendor),
+      app:     appGrp,
       appRaw:  appRaw || '(sin nombre)',
       ver:     verUsable || '(sin versión)',
       cpeRaw,

@@ -38,6 +38,8 @@ function Interno(guardados) {
       return k;
     },
     val: k => vals[k] || '',
+    /** El entero de un valor, o -1 si no esta. A diferencia de `id`, no lo crea. */
+    idDe(v) { const k = map.get(v == null ? '' : String(v)); return k === undefined ? -1 : k; },
     get size() { return vals.length; }
   };
 }
@@ -56,6 +58,73 @@ function Columna(cap, datos, largo) {
     get array() { return a; },
     get length() { return n; },
     get bytes() { return a.length * 4; }
+  };
+}
+
+/**
+ * Indice de instalaciones: quien tiene que, y en que version.
+ *
+ * Aparte del modelo y a proposito. El modelo solo lleva con nombre de equipo lo
+ * que va por detras del estandar, porque agregar millones de filas en cada
+ * dibujo es lo que vuelve lento un tablero. Pero responder «que equipos tienen
+ * esta aplicacion» no necesita agregar nada: es recorrer una columna.
+ *
+ * Tres enteros por instalacion y ni un campo mas: 12 bytes por fila, unos 54 MB
+ * para los cuatro millones y medio del parque real.
+ */
+function Indice(guardado) {
+  let dDev = Interno(), dApp = Interno(), dVer = Interno();
+  let cDev = Columna(), cApp = Columna(), cVer = Columna();
+  let n = 0;
+  if (guardado) {
+    n = guardado.n;
+    dDev = Interno(guardado.dev); dApp = Interno(guardado.app); dVer = Interno(guardado.ver);
+    cDev = Columna(0, guardado.cDev, n);
+    cApp = Columna(0, guardado.cApp, n);
+    cVer = Columna(0, guardado.cVer, n);
+  }
+  return {
+    get length() { return n; },
+    add(dev, app, ver) {
+      cDev.push(dDev.id(dev)); cApp.push(dApp.id(app)); cVer.push(dVer.id(ver)); n++;
+    },
+
+    /**
+     * Los equipos que tienen una aplicacion, con la version mas alta de cada uno.
+     *
+     * Un recorrido de enteros comparando uno: con cuatro millones y medio de
+     * filas son unos milisegundos, que para un clic no se nota.
+     */
+    equiposDe(app) {
+      const ai = dApp.idDe(app);
+      const salida = new Map();
+      if (ai < 0) return salida;
+      const aA = cApp.array, aD = cDev.array, aV = cVer.array;
+      const vD = dDev.vals, vV = dVer.vals;
+      for (let i = 0; i < n; i++) {
+        if (aA[i] !== ai) continue;
+        const d = vD[aD[i]];
+        if (!d) continue;
+        const v = vV[aV[i]] || '(sin versión)';
+        const p = salida.get(d);
+        if (p === undefined || (!VER_UNK.test(v) && verCmp(v, p) > 0)) salida.set(d, v);
+      }
+      return salida;
+    },
+
+    /** Si sabe algo de esta aplicacion. Barato: no recorre nada. */
+    conoce(app) { return dApp.idDe(app) >= 0; },
+
+    volcado() {
+      return { n, dev: dDev.vals, app: dApp.vals, ver: dVer.vals,
+               cDev: cDev.array.slice(0, n), cApp: cApp.array.slice(0, n), cVer: cVer.array.slice(0, n) };
+    },
+    bytes() {
+      let b = cDev.bytes + cApp.bytes + cVer.bytes;
+      for (const vals of [dDev.vals, dApp.vals, dVer.vals])
+        for (const s of vals) b += s.length * 2 + 24;
+      return b;
+    }
   };
 }
 

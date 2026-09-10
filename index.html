@@ -1029,6 +1029,15 @@ function baseApp(nombre) {
 /* ============================================================================
    3. DETECCION DE COLUMNAS  ·  ingles + espanol
    ========================================================================== */
+/* Como se nombra una aplicacion, en un solo sitio.
+   El importador y el modelo TIENEN que coincidir: cuando no coincidian, el
+   importador veia «X - 1.2» y «X - 1.3» como dos aplicaciones distintas con una
+   version cada una, ninguna estaba por detras de si misma, y no extraia un solo
+   nombre de equipo. */
+const normVendor = v => (!v || VEN_UNK.test(v)) ? '(sin fabricante)' : v;
+const normApp = a => (CFG.params.agrupaVersion === false ? a : baseApp(a)) || a || '(sin nombre)';
+const claveApp = (v, a) => normVendor(v) + ' / ' + normApp(a);
+
 const ROLES = [
   ['count',  ['equipos','dispositivos','devicecount','devicecounts','numerodispositivos',
               'numeroequipos','recuento','cantidadequipos','totalequipos','nodevices','noofdevices',
@@ -1111,6 +1120,8 @@ function Interno(guardados) {
       return k;
     },
     val: k => vals[k] || '',
+    /** El entero de un valor, o -1 si no esta. A diferencia de `id`, no lo crea. */
+    idDe(v) { const k = map.get(v == null ? '' : String(v)); return k === undefined ? -1 : k; },
     get size() { return vals.length; }
   };
 }
@@ -1129,6 +1140,73 @@ function Columna(cap, datos, largo) {
     get array() { return a; },
     get length() { return n; },
     get bytes() { return a.length * 4; }
+  };
+}
+
+/**
+ * Indice de instalaciones: quien tiene que, y en que version.
+ *
+ * Aparte del modelo y a proposito. El modelo solo lleva con nombre de equipo lo
+ * que va por detras del estandar, porque agregar millones de filas en cada
+ * dibujo es lo que vuelve lento un tablero. Pero responder «que equipos tienen
+ * esta aplicacion» no necesita agregar nada: es recorrer una columna.
+ *
+ * Tres enteros por instalacion y ni un campo mas: 12 bytes por fila, unos 54 MB
+ * para los cuatro millones y medio del parque real.
+ */
+function Indice(guardado) {
+  let dDev = Interno(), dApp = Interno(), dVer = Interno();
+  let cDev = Columna(), cApp = Columna(), cVer = Columna();
+  let n = 0;
+  if (guardado) {
+    n = guardado.n;
+    dDev = Interno(guardado.dev); dApp = Interno(guardado.app); dVer = Interno(guardado.ver);
+    cDev = Columna(0, guardado.cDev, n);
+    cApp = Columna(0, guardado.cApp, n);
+    cVer = Columna(0, guardado.cVer, n);
+  }
+  return {
+    get length() { return n; },
+    add(dev, app, ver) {
+      cDev.push(dDev.id(dev)); cApp.push(dApp.id(app)); cVer.push(dVer.id(ver)); n++;
+    },
+
+    /**
+     * Los equipos que tienen una aplicacion, con la version mas alta de cada uno.
+     *
+     * Un recorrido de enteros comparando uno: con cuatro millones y medio de
+     * filas son unos milisegundos, que para un clic no se nota.
+     */
+    equiposDe(app) {
+      const ai = dApp.idDe(app);
+      const salida = new Map();
+      if (ai < 0) return salida;
+      const aA = cApp.array, aD = cDev.array, aV = cVer.array;
+      const vD = dDev.vals, vV = dVer.vals;
+      for (let i = 0; i < n; i++) {
+        if (aA[i] !== ai) continue;
+        const d = vD[aD[i]];
+        if (!d) continue;
+        const v = vV[aV[i]] || '(sin versión)';
+        const p = salida.get(d);
+        if (p === undefined || (!VER_UNK.test(v) && verCmp(v, p) > 0)) salida.set(d, v);
+      }
+      return salida;
+    },
+
+    /** Si sabe algo de esta aplicacion. Barato: no recorre nada. */
+    conoce(app) { return dApp.idDe(app) >= 0; },
+
+    volcado() {
+      return { n, dev: dDev.vals, app: dApp.vals, ver: dVer.vals,
+               cDev: cDev.array.slice(0, n), cApp: cApp.array.slice(0, n), cVer: cVer.array.slice(0, n) };
+    },
+    bytes() {
+      let b = cDev.bytes + cApp.bytes + cVer.bytes;
+      for (const vals of [dDev.vals, dApp.vals, dVer.vals])
+        for (const s of vals) b += s.length * 2 + 24;
+      return b;
+    }
   };
 }
 
@@ -1420,6 +1498,9 @@ const M = {
   // que lector se leyo: releer un Parquet como texto revienta. `archivoNombre`
   // es solo el nombre, que es lo que sobrevive a la copia guardada.
   archivo: null, esParquet: false, archivoNombre: '', completo: [],
+  // Todas las instalaciones, aparte del modelo: para poder decir en QUE equipos
+  // esta una aplicacion sin cargar millones de filas en el tablero.
+  indice: null,
   hasGeo: false, hasCliente: false, hasArea: false, hasTime: false, hasUser: false,
   hasEos: false, hasDetalle: false, hasAgregado: false,
   deviceApps: new Map(), latestVer: new Map(), maxDate: null, minDate: null
@@ -1504,6 +1585,8 @@ function resetModel() {
   M.tabla = Tabla();
   M.rows = Filas(M.tabla, new Int32Array(0));
   M.devInfo = new Map();
+  // El indice NO se borra aqui: los importadores lo llenan antes de montar el
+  // modelo, y esto se llama a mitad de camino. Se limpia al quitar todo.
   // El archivo de origen NO se toca aqui: los importadores lo anotan antes de
   // empezar y llaman a esto a mitad de camino. Se limpia al quitar todo.
 }
@@ -1511,6 +1594,7 @@ function resetModel() {
 /** Olvida tambien de donde venia. Esto es «quitar todos los archivos». */
 function resetOrigen() {
   M.archivo = null; M.archivoNombre = ''; M.esParquet = false; M.completo = [];
+  M.indice = null;
 }
 
 function addSource(grid, fileName, sheet, reset) {
@@ -1567,7 +1651,9 @@ function addSource(grid, fileName, sheet, reset) {
     }
     // El nombre tal cual se conserva: agrupar no es perder.
     const appRaw = app;
-    const appGrp = CFG.params.agrupaVersion === false ? app : baseApp(app);
+    // Los mismos que usa el importador, y a proposito: cuando cada uno
+    // agrupaba por su cuenta, el importador no extraia un solo nombre de equipo.
+    const appGrp = normApp(app);
     // Una fila que resume una aplicacion entera trae cuantas versiones conviven.
     // Si son varias, la version de la fila es solo la mas alta y no representa a
     // los equipos que cuenta: darla por buena para todos inflaria el
@@ -1582,8 +1668,8 @@ function addSource(grid, fileName, sheet, reset) {
     const o = {
       device, w,
       user:    device ? '' : '',
-      vendor:  (!vendor || VEN_UNK.test(vendor)) ? '(sin fabricante)' : vendor,
-      app:     appGrp || app || '(sin nombre)',
+      vendor:  normVendor(vendor),
+      app:     appGrp,
       appRaw:  appRaw || '(sin nombre)',
       ver:     verUsable || '(sin versión)',
       cpeRaw,
@@ -1936,6 +2022,9 @@ function paqueteModelo() {
     esParquet: !!M.esParquet,
     completo: M.completo || [],
     tabla: M.tabla.volcado(),
+    // El indice va con la copia: sin el habria que releer el archivo entero
+    // para volver a saber en que equipos esta cada aplicacion.
+    indice: M.indice ? M.indice.volcado() : null,
     // El archivo original NO se guarda: son los mismos cientos de megas otra
     // vez, y para abrir el tablero no hace falta.
     fuentes: M.sources.map(s => ({
@@ -1952,7 +2041,9 @@ async function guardarModelo() {
   const ficha = {
     archivo: p.archivo, guardado: p.guardado, filas: p.tabla.n,
     equipos: M.devInfo ? M.devInfo.size : 0,
-    fuentes: p.fuentes.map(f => f.name), bytes: M.tabla.bytes()
+    instalaciones: M.indice ? M.indice.length : 0,
+    fuentes: p.fuentes.map(f => f.name),
+    bytes: M.tabla.bytes() + (M.indice ? M.indice.bytes() : 0)
   };
   await operaBD('readwrite', st => { st.put(p, BD_MODELO); return st.put(ficha, BD_FICHA); });
   GUARDADO = ficha;
@@ -1967,6 +2058,7 @@ async function restaurarModelo() {
   // archivo, que es mucho mejor que enseñar numeros a medias.
   if (p.v !== 1) { await olvidarModelo(); return null; }
   M.tabla = Tabla(p.tabla);
+  M.indice = p.indice ? Indice(p.indice) : null;
   M.sources = p.fuentes.map(s => Object.assign({}, s, { rows: Filas(M.tabla, s.idx) }));
   M.completo = p.completo || [];
   M.esParquet = !!p.esParquet;
@@ -1977,7 +2069,8 @@ async function restaurarModelo() {
   M.effVer = effVersions(M.rows);
   GUARDADO = { archivo: p.archivo, guardado: p.guardado, filas: p.tabla.n,
                equipos: M.devInfo.size, fuentes: p.fuentes.map(f => f.name),
-               bytes: M.tabla.bytes() };
+               instalaciones: M.indice ? M.indice.length : 0,
+               bytes: M.tabla.bytes() + (M.indice ? M.indice.bytes() : 0) };
   return GUARDADO;
 }
 
@@ -2156,6 +2249,21 @@ async function importarGrande(file, opts, onProg) {
     completos.some(c => app.toLowerCase().indexOf(c) >= 0);
   const aviso = (frac, filas, fase) => onProg && onProg(frac, filas, fase);
 
+  /**
+   * El nombre agrupado, el MISMO que usa el modelo.
+   *
+   * Sin esto, «X - 1.2» y «X - 1.3» son dos aplicaciones distintas con una
+   * version cada una, y entonces ninguna esta nunca por detras de si misma: no
+   * se extraeria un solo nombre de equipo. Se cachea porque son decenas de
+   * miles de nombres distintos y millones de filas.
+   */
+  const cacheGrupo = new Map();
+  const grupo = a => {
+    let x = cacheGrupo.get(a);
+    if (x === undefined) cacheGrupo.set(a, x = (CFG.params.agrupaVersion === false ? a : baseApp(a)));
+    return x;
+  };
+
   // El File es un puntero al archivo en disco, no una copia: guardarlo no cuesta
   // memoria y permite volver a recorrerlo despues para una aplicacion concreta.
   M.archivo = file;
@@ -2183,6 +2291,8 @@ async function importarGrande(file, opts, onProg) {
   const cuenta = new Map();     // vendor \x01 app \x01 ver -> instalaciones
   const alta = new Map();       // vendor \x01 app          -> version mas alta
   const fichas = new Map();     // equipo                   -> ficha
+  // Todas las instalaciones, aparte del modelo: tres enteros por fila.
+  const indice = Indice();
 
   const filas = await recorrerArchivo(file, sep, f => {
     const dev = g(f, ix.dev);
@@ -2192,9 +2302,13 @@ async function importarGrande(file, opts, onProg) {
     const app = g(f, ix.app);
     if (!app) return;
     const ven = g(f, ix.ven), ver = g(f, ix.ver);
+    // Toda instalacion entra en el indice, la vea el modelo o no: son tres
+    // enteros, y es lo que permite decir despues en que equipos esta una
+    // aplicacion sin volver a leer el archivo.
+    if (dev) indice.add(dev, claveApp(ven, app), ver);
     const k = ven + SEP1 + app + SEP1 + ver;
     cuenta.set(k, (cuenta.get(k) || 0) + 1);
-    const ka = ven + SEP1 + app;
+    const ka = ven + SEP1 + grupo(app);
     const prev = alta.get(ka);
     if (prev === undefined || (!VER_UNK.test(ver) && verCmp(ver, prev) > 0)) alta.set(ka, ver);
   }, (frac, n) => aviso(frac * 0.5, n, 'Recorriendo el archivo'));
@@ -2227,7 +2341,7 @@ async function importarGrande(file, opts, onProg) {
   });
   const atrasada = (ven, app, ver) => {
     if (esCompleto(app)) return true;
-    const t = tope.get(ven + SEP1 + app) || '';
+    const t = tope.get(ven + SEP1 + grupo(app)) || '';
     return !!(t && !VER_UNK.test(ver) && verCmp(ver, t) < 0);
   };
 
@@ -2238,7 +2352,7 @@ async function importarGrande(file, opts, onProg) {
   cuenta.forEach((n, k) => {
     const p = k.split(SEP1);
     if (!atrasada(p[0], p[1], p[2])) return;
-    const ka = p[0] + SEP1 + p[1];
+    const ka = p[0] + SEP1 + grupo(p[1]);
     porApp.set(ka, (porApp.get(ka) || 0) + n);
   });
 
@@ -2269,10 +2383,10 @@ async function importarGrande(file, opts, onProg) {
     const dev = g(f, ix.dev), app = g(f, ix.app);
     if (!dev || !app) return;
     const ven = g(f, ix.ven);
-    if (!dentro.has(ven + SEP1 + app)) return;
+    if (!dentro.has(ven + SEP1 + grupo(app))) return;
     const ver = g(f, ix.ver);
     if (!atrasada(ven, app, ver)) return;
-    excep.push([dev, g(f, ix.usr), ven, app, ver, tope.get(ven + SEP1 + app) || '', g(f, ix.osv)]);
+    excep.push([dev, g(f, ix.usr), ven, app, ver, tope.get(ven + SEP1 + grupo(app)) || '', g(f, ix.osv)]);
   }, (frac, n) => aviso(0.52 + frac * 0.46, n, 'Buscando equipos atrasados'));
 
   resetModel();
@@ -2280,6 +2394,7 @@ async function importarGrande(file, opts, onProg) {
   if (catalogo.length > 1) addSource(catalogo, nombre + ' · catálogo', '', false);
   if (excep.length > 1) addSource(excep, nombre + ' · atrasados', '', false);
 
+  M.indice = indice;
   M.aggFull = aggregate(M.rows);
   M.effVer = effVersions(M.rows);
   seedCatalog();
@@ -2338,6 +2453,21 @@ async function importarParquet(file, opts, onProg) {
   const esCompleto = app => completos.length > 0 &&
     completos.some(c => app.toLowerCase().indexOf(c) >= 0);
   const aviso = (frac, filas, fase) => onProg && onProg(frac, filas, fase);
+
+  /**
+   * El nombre agrupado, el MISMO que usa el modelo.
+   *
+   * Sin esto, «X - 1.2» y «X - 1.3» son dos aplicaciones distintas con una
+   * version cada una, y entonces ninguna esta nunca por detras de si misma: no
+   * se extraeria un solo nombre de equipo. Se cachea porque son decenas de
+   * miles de nombres distintos y millones de filas.
+   */
+  const cacheGrupo = new Map();
+  const grupo = a => {
+    let x = cacheGrupo.get(a);
+    if (x === undefined) cacheGrupo.set(a, x = (CFG.params.agrupaVersion === false ? a : baseApp(a)));
+    return x;
+  };
 
   M.archivo = file;
   M.esParquet = true;       // con que lector se leyo, para poder repetirlo
@@ -2401,6 +2531,8 @@ async function importarParquet(file, opts, onProg) {
 
   /* ---- pasada 1 ---- */
   const cuenta = new Map(), alta = new Map(), fichas = new Map();
+  // Todas las instalaciones, aparte del modelo: tres enteros por fila.
+  const indice = Indice();
   const filas = await recorrer(o => {
     const dev = g(o, col.dev);
     if (dev && !fichas.has(dev))
@@ -2408,9 +2540,13 @@ async function importarParquet(file, opts, onProg) {
     const app = g(o, col.app);
     if (!app) return;
     const ven = g(o, col.ven), ver = g(o, col.ver);
+    // Toda instalacion entra en el indice, la vea el modelo o no: son tres
+    // enteros, y es lo que permite decir despues en que equipos esta una
+    // aplicacion sin volver a leer el archivo.
+    if (dev) indice.add(dev, claveApp(ven, app), ver);
     const k = ven + SEP1 + app + SEP1 + ver;
     cuenta.set(k, (cuenta.get(k) || 0) + 1);
-    const ka = ven + SEP1 + app;
+    const ka = ven + SEP1 + grupo(app);
     const prev = alta.get(ka);
     if (prev === undefined || (!VER_UNK.test(ver) && verCmp(ver, prev) > 0)) alta.set(ka, ver);
   }, 0, 0.5);
@@ -2439,7 +2575,7 @@ async function importarParquet(file, opts, onProg) {
   });
   const atrasada = (ven, app, ver) => {
     if (esCompleto(app)) return true;
-    const t = tope.get(ven + SEP1 + app) || '';
+    const t = tope.get(ven + SEP1 + grupo(app)) || '';
     return !!(t && !VER_UNK.test(ver) && verCmp(ver, t) < 0);
   };
 
@@ -2447,7 +2583,7 @@ async function importarParquet(file, opts, onProg) {
   cuenta.forEach((n, k) => {
     const p = k.split(SEP1);
     if (!atrasada(p[0], p[1], p[2])) return;
-    const ka = p[0] + SEP1 + p[1];
+    const ka = p[0] + SEP1 + grupo(p[1]);
     porApp.set(ka, (porApp.get(ka) || 0) + n);
   });
   const MAX = opts.maxExcep || TOPE_DETALLE;
@@ -2474,10 +2610,10 @@ async function importarParquet(file, opts, onProg) {
     const dev = g(o, col.dev), app = g(o, col.app);
     if (!dev || !app) return;
     const ven = g(o, col.ven);
-    if (!dentro.has(ven + SEP1 + app)) return;
+    if (!dentro.has(ven + SEP1 + grupo(app))) return;
     const ver = g(o, col.ver);
     if (!atrasada(ven, app, ver)) return;
-    excep.push([dev, g(o, col.usr), ven, app, ver, tope.get(ven + SEP1 + app) || '', g(o, col.osv)]);
+    excep.push([dev, g(o, col.usr), ven, app, ver, tope.get(ven + SEP1 + grupo(app)) || '', g(o, col.osv)]);
   }, 0.52, 0.46);
 
   resetModel();
@@ -2485,6 +2621,7 @@ async function importarParquet(file, opts, onProg) {
   if (catalogo.length > 1) addSource(catalogo, nombre + ' · catálogo', '', false);
   if (excep.length > 1) addSource(excep, nombre + ' · atrasados', '', false);
 
+  M.indice = indice;
   M.aggFull = aggregate(M.rows);
   M.effVer = effVersions(M.rows);
   seedCatalog();
@@ -4121,11 +4258,23 @@ function vApp(A, rows, key) {
     const p = devVer.get(x.device);
     if (!p || (!VER_UNK.test(x.ver) && verCmp(x.ver, p) > 0)) devVer.set(x.device, x.ver);
   }
-  const devTbl = Array.from(devVer.entries()).map(([d, v]) => ({
-    dev:d, ver:v, estado: evalVer(key, v), user: (rowsApp.find(x => x.device === d) || {}).user || '',
-    osver: (rowsApp.find(x => x.device === d) || {}).osver || '',
-    last: (CMP.dev.get(d) || {}).last || null
-  }));
+  // El modelo solo nombra equipos de lo que va POR DETRAS del estandar, asi que
+  // una aplicacion con todo el parque en la misma version no nombraba ninguno.
+  // El indice de instalaciones los tiene todos: sin filtro puesto se completa
+  // desde ahi, y no hay que releer el archivo. Con filtro no se toca, porque la
+  // tabla tiene que responder a lo que el filtro dice.
+  const filtrando = activeDims().length > 0 || !!S.q.trim();
+  const delIndice = !filtrando && M.indice && devVer.size < total;
+  if (delIndice) M.indice.equiposDe(key).forEach((v, d) => { if (!devVer.has(d)) devVer.set(d, v); });
+
+  // El usuario y la version de SO son del EQUIPO, no de la fila: se sacan de su
+  // ficha. Antes se buscaban recorriendo las filas por cada equipo, que con unos
+  // miles de ellos es un cuadrado.
+  const devTbl = Array.from(devVer.entries()).map(([d, v]) => {
+    const f = M.devInfo.get(d) || {};
+    return { dev:d, ver:v, estado: evalVer(key, v), user: f.user || '', osver: f.osver || '',
+             last: (CMP.dev.get(d) || {}).last || null };
+  });
   // evolucion en el histórico
   const hs = HIST.filter(h => h.apps && h.apps[key]);
   const eco = hs.length > 1 ? trendMulti(hs.map(h => h.fecha),
@@ -4202,7 +4351,8 @@ function vApp(A, rows, key) {
       sub: devTbl.length < total
         ? `${fmt(devTbl.length)} de ${fmt(total)} equipos, los que se conoce el nombre. ` +
           `El resto viene de un catálogo agregado, que cuenta cuántos hay en cada versión pero no cuáles`
-        : `${fmt(devTbl.length)} equipos`,
+        : `${fmt(devTbl.length)} equipos` +
+          (delIndice ? ' · nombres tomados del inventario completo, no de la selección' : ''),
       data: devTbl, sort:{ k:'estado', d:1 },
       rowAttr: x => `data-godev="${esc(x.dev)}"`,
       cols:[{ k:'dev', l:'Equipo', cls:'name' }, { k:'user', l:'Usuario' },
@@ -6583,7 +6733,8 @@ function vDatos(A, rows) {
   const copia = GUARDADO ? `<div class="banner" style="margin:12px 0 0">${ico('shield')}<div>
       <b>Hay una copia guardada en este equipo</b>, así que el tablero abre con los datos
       puestos sin volver a traer el archivo.
-      ${esc(GUARDADO.archivo || '')} · ${fmt(GUARDADO.filas)} filas ·
+      ${esc(GUARDADO.archivo || '')} · ${fmt(GUARDADO.filas)} filas del modelo${
+        GUARDADO.instalaciones ? ` · ${fmt(GUARDADO.instalaciones)} instalaciones indexadas` : ''} ·
       ${GUARDADO.bytes ? (GUARDADO.bytes / 1048576).toFixed(1) + ' MB' : ''} ·
       guardada el ${GUARDADO.guardado ? new Date(GUARDADO.guardado).toLocaleString('es-CO') : '—'}.
       <span class="mini" style="display:block;margin-top:4px">Vive en el almacen del navegador de esta
