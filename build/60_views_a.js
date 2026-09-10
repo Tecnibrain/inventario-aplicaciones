@@ -575,12 +575,26 @@ function vEquipos(A, rows) {
 
 function vEquipo(A, rows, dev) {
   const rr = rows.filter(x => x.device === dev);
-  if (!rr.length) return viewHead('Equipo no encontrado', 'No hay datos de este equipo en la selección activa.') +
+  const ficha = M.devInfo.get(dev);
+  if (!rr.length && !ficha) return viewHead('Equipo no encontrado', 'No hay datos de este equipo en la selección activa.') +
     `<button class="btn" data-go="equipos">Volver al inventario</button>`;
   const c = CMP.dev.get(dev) || { ok:0, warn:0, bad:0, na:0, estado:'na', noAuth:[], last:null };
-  const f = rr[0];
+  // El usuario, el sistema y la ubicacion son del EQUIPO, no de una fila suya:
+  // manda su ficha, y la fila solo completa lo que la ficha no traiga. Ademas
+  // `rows.filter` devuelve una vista de la tabla, no un array: `rr[0]` era
+  // undefined y reventaba la vista entera antes de dibujar nada.
+  const fila = rr.length ? rr.en(0) : {};
+  const g = campo => (ficha && ficha[campo]) || fila[campo] || '';
+  const f = { user: g('user'), os: g('os'), osver: g('osver'), geo: g('geo'),
+              cliente: g('cliente'), area: g('area'), domain: g('domain') };
   const best = new Map();
   for (const x of rr) { const p = best.get(x.appKey); if (!p || (!VER_UNK.test(x.ver) && verCmp(x.ver, p) > 0)) best.set(x.appKey, x.ver); }
+  // El modelo solo trae lo atrasado, asi que un equipo al dia no tendria ni una
+  // aplicacion que ensenar. El indice las tiene todas; con filtro puesto no se
+  // toca, que la vista debe responder a lo que el filtro dice.
+  const filtrando = activeDims().length > 0 || !!S.q.trim();
+  const delIndice = !filtrando && M.indice;
+  if (delIndice) M.indice.appsDe(dev).forEach((v, k) => { if (!best.has(k)) best.set(k, v); });
   const apps = Array.from(best.entries()).map(([k, v]) => {
     const r = rule(k) || {};
     return { key:k, name: appLabel(k), vendor: pretty(vendorOfApp(k)), cat: r.cat || 'Otro',
@@ -605,7 +619,7 @@ function vEquipo(A, rows, dev) {
       <div class="fact"><dt>No cumplen</dt><dd class="big" style="color:${c.bad+c.noAuth.length?'var(--crit-ink)':'var(--ok-ink)'}">${fmt(c.bad + c.noAuth.length)}</dd></div>
       <div class="fact"><dt>Última sincronización</dt><dd>${c.last ? c.last.toLocaleString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'sin fecha'}
         ${c.staleDias ? `<div class="mini" style="color:var(--warn-ink);font-weight:600">Hace ${fmt(c.staleDias)} días</div>` : ''}</dd></div>
-      <div class="fact"><dt>Trazabilidad CPE</dt><dd>${fmt1(pct(cpeOk, rr.length))} %</dd></div>
+      ${rr.length ? `<div class="fact"><dt>Trazabilidad CPE</dt><dd>${fmt1(pct(cpeOk, rr.length))} %</dd></div>` : ''}
       ${f.geo ? `<div class="fact"><dt>Ubicación</dt><dd>${esc(f.geo)}</dd></div>` : ''}
     </dl>
     <div style="margin-top:16px">${cbar(c)}
@@ -619,7 +633,9 @@ function vEquipo(A, rows, dev) {
         <div class="alert-t">${fmt(c.noAuth.length)} aplicaciones no permitidas en este equipo</div>
         <div class="alert-d">${c.noAuth.map(k => '<b>' + esc(appLabel(k)) + '</b>').join(' · ')}</div>
       </div></div></div>` : '') +
-    sec('Aplicaciones instaladas', 'Ordenadas por severidad: primero lo que hay que corregir') +
+    sec('Aplicaciones instaladas', delIndice
+      ? 'Todas las del inventario completo, ordenadas por severidad: primero lo que hay que corregir'
+      : 'Ordenadas por severidad: primero lo que hay que corregir') +
     mtable({ id:'devApps', title:'Software del equipo', data: apps, sort:{ k:'ord', d:1 },
       rowAttr: r => `data-goapp="${esc(r.key)}"`,
       cols:[{ k:'name', l:'Aplicación', cls:'name' }, { k:'vendor', l:'Fabricante' },

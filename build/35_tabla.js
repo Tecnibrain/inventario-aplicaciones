@@ -112,6 +112,25 @@ function Indice(guardado) {
       return salida;
     },
 
+    /** Las aplicaciones que tiene un equipo, con la version de cada una. La
+     *  misma consulta del reves: recorrer una columna comparando un entero. */
+    appsDe(dev) {
+      const di = dDev.idDe(dev);
+      const salida = new Map();
+      if (di < 0) return salida;
+      const aA = cApp.array, aD = cDev.array, aV = cVer.array;
+      const vA = dApp.vals, vV = dVer.vals;
+      for (let i = 0; i < n; i++) {
+        if (aD[i] !== di) continue;
+        const k = vA[aA[i]];
+        if (!k) continue;
+        const v = vV[aV[i]] || '(sin versión)';
+        const p = salida.get(k);
+        if (p === undefined || (!VER_UNK.test(v) && verCmp(v, p) > 0)) salida.set(k, v);
+      }
+      return salida;
+    },
+
     /** Si sabe algo de esta aplicacion. Barato: no recorre nada. */
     conoce(app) { return dApp.idDe(app) >= 0; },
 
