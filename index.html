@@ -4346,6 +4346,199 @@ function Exportar {
 `;
 }
 
+/* ---- 24.5e preparar los datos con DuckDB ---------------------------------
+   Convertir el detalle a Parquet y resumirlo con SQL. Medido sobre 414 MB y
+   1.276.473 filas: 2,5 segundos y 5,3 MB de salida, setenta y siete veces mas
+   pequeno. El recorredor en C# hacia lo mismo mucho mas despacio y con diez
+   veces mas codigo.
+
+   Comparar versiones en SQL es el punto delicado: "1.10" va por debajo de "1.9"
+   si se comparan como texto. Se construye una clave rellenando cada tramo a diez
+   digitos, y esa si se ordena bien. Sin lambdas: la sintaxis de la flecha
+   esta marcada como obsoleta en DuckDB y esto tiene que seguir funcionando
+   dentro de un ano.
+   ------------------------------------------------------------------------ */
+function scriptDuck() {
+  return `<#
+    Inventario de Aplicaciones - preparar el detalle con DuckDB
+    Generado el ${new Date().toLocaleString('es-CO')}${CFG.org ? ' para ' + CFG.org : ''}
+
+    Que hace:
+      1. Convierte el CSV del detalle a Parquet. Medido: 414 MB -> 5,3 MB, y
+         tarda segundos. Parquet guarda por columnas y con diccionario, y este
+         dato son nombres repetidos millones de veces, asi que se comprime
+         muchisimo.
+      2. Saca de ahi, con SQL, las tres formas que el tablero funde:
+            parque.csv       un registro por equipo
+            catalogo.csv     aplicacion + version + cuantos equipos
+            atrasados.csv    QUE equipo va por detras
+      3. Deja el .parquet, que puedes consultar con SQL para cualquier pregunta
+         que el tablero no responda.
+
+    Necesita duckdb.exe, que es un unico ejecutable portable y no se instala.
+    Si no lo tienes, el script te dice de donde bajarlo.
+
+    Uso:
+      .\\preparar-duckdb.ps1 -Ruta 'C:\\ruta\\salida\\detalle.csv'
+#>
+
+param(
+    [string]$Ruta,
+    [string]$Duck = ''
+)
+
+$ErrorActionPreference = 'Stop'
+
+if (-not $Ruta) { $Ruta = Read-Host 'Ruta del CSV del detalle' }
+$Ruta = $Ruta.Trim().Trim('"')
+if (-not (Test-Path $Ruta)) { throw "No existe el archivo: $Ruta" }
+$Ruta = (Resolve-Path $Ruta).Path
+$Carpeta = Split-Path $Ruta -Parent
+
+# ------------------------------------------------------------------ duckdb
+if (-not $Duck) {
+    $cand = @(
+        (Join-Path $PSScriptRoot 'duckdb.exe'),
+        (Join-Path $Carpeta 'duckdb.exe'),
+        'duckdb.exe'
+    )
+    foreach ($c in $cand) {
+        $g = Get-Command $c -ErrorAction SilentlyContinue
+        if ($g) { $Duck = $g.Source; break }
+    }
+}
+if (-not $Duck) {
+    Write-Host ''
+    Write-Host 'No encuentro duckdb.exe.' -ForegroundColor Yellow
+    Write-Host 'Es un unico ejecutable portable, no se instala ni toca el registro.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  https://github.com/duckdb/duckdb/releases/latest' -ForegroundColor Cyan
+    Write-Host '  Baja duckdb_cli-windows-amd64.zip, descomprimelo y deja duckdb.exe'
+    Write-Host '  junto a este script. Luego vuelve a ejecutarlo.'
+    Write-Host ''
+    $r = Read-Host 'Si prefieres, pega aqui la ruta a duckdb.exe (o Enter para salir)'
+    if (-not $r) { exit 1 }
+    $Duck = $r.Trim().Trim('"')
+    if (-not (Test-Path $Duck)) { throw "No existe: $Duck" }
+}
+Write-Host ("DuckDB: {0}" -f $Duck) -ForegroundColor DarkGray
+
+# ------------------------------------------------ que columnas trae el CSV
+$cab = (Get-Content $Ruta -TotalCount 1) -replace '^\\uFEFF', ''
+$cols = @()
+foreach ($c in ($cab -split ',')) { $cols += $c.Trim('"').Trim() }
+
+function Col {
+    param([string[]]$Candidatas)
+    foreach ($cand in $Candidatas) {
+        foreach ($c in $cols) { if ($c -ieq $cand) { return $c } }
+    }
+    return $null
+}
+
+$cDev = Col @('DeviceName','Device','Equipo','ManagedDeviceName')
+$cApp = Col @('ApplicationName','SoftwareName','DisplayName','Apps')
+$cVen = Col @('ApplicationPublisher','SoftwareVendor','Publisher')
+$cVer = Col @('ApplicationVersion','SoftwareVersion','Installed Version','Version')
+$cUsr = Col @('UserName','UPN','EmailAddress','Last Signed-in User')
+$cOs  = Col @('OSDescription','Platform','OS','OSDistribution')
+$cOsV = Col @('OSVersion','OSVersionInfo')
+
+if (-not $cApp -or -not $cDev) {
+    throw "No reconozco las columnas. Cabecera: $cab"
+}
+Write-Host ("Columnas: equipo={0}  aplicacion={1}  version={2}" -f $cDev, $cApp, $cVer) -ForegroundColor DarkGray
+
+$q = { param($c) if ($c) { '"' + $c + '"' } else { 'NULL' } }
+$Q_DEV = & $q $cDev; $Q_APP = & $q $cApp; $Q_VEN = & $q $cVen
+$Q_VER = & $q $cVer; $Q_USR = & $q $cUsr; $Q_OS = & $q $cOs; $Q_OSV = & $q $cOsV
+
+# DuckDB trata la barra invertida como escape, asi que todas las rutas van con
+# barra normal. Windows las acepta igual.
+function Ruta { param([string]$P) return $P.Replace([char]92, '/') }
+
+$Parquet   = Join-Path $Carpeta 'detalle.parquet'
+$Parque    = Join-Path $Carpeta 'parque.csv'
+$Catalogo  = Join-Path $Carpeta 'catalogo.csv'
+$Atrasados = Join-Path $Carpeta 'atrasados.csv'
+
+# El SQL. La clave de version rellena cada tramo a diez digitos: sin eso,
+# "1.10" quedaria por debajo de "1.9" al comparar como texto, que es el error
+# clasico y el que hace que un tablero de versiones mienta.
+$sql = @"
+SET preserve_insertion_order = false;
+
+COPY (SELECT * FROM read_csv_auto('$(Ruta $Ruta)', SAMPLE_SIZE=-1, ignore_errors=true))
+  TO '$(Ruta $Parquet)' (FORMAT parquet, COMPRESSION zstd);
+
+CREATE OR REPLACE MACRO vkey(v) AS
+  lpad(regexp_replace(split_part(coalesce(v,''),'.',1),'[^0-9]','','g'),10,'0') || '.' ||
+  lpad(regexp_replace(split_part(coalesce(v,''),'.',2),'[^0-9]','','g'),10,'0') || '.' ||
+  lpad(regexp_replace(split_part(coalesce(v,''),'.',3),'[^0-9]','','g'),10,'0') || '.' ||
+  lpad(regexp_replace(split_part(coalesce(v,''),'.',4),'[^0-9]','','g'),10,'0') || '.' ||
+  lpad(regexp_replace(split_part(coalesce(v,''),'.',5),'[^0-9]','','g'),10,'0');
+
+CREATE OR REPLACE VIEW d AS
+  SELECT $Q_DEV AS dev, $Q_USR AS usr, $Q_VEN AS ven, $Q_APP AS app,
+         $Q_VER AS ver, $Q_OS AS os, $Q_OSV AS osv
+  FROM '$(Ruta $Parquet)'
+  WHERE $Q_DEV IS NOT NULL AND $Q_DEV <> '';
+
+COPY (
+  SELECT dev AS DeviceName, any_value(usr) AS UserName,
+         any_value(os) AS OSDistribution, any_value(osv) AS OSVersionInfo
+  FROM d GROUP BY dev
+) TO '$(Ruta $Parque)' (HEADER, DELIMITER ',');
+
+CREATE OR REPLACE VIEW tope AS
+  SELECT ven, app, max(vkey(ver)) AS vmax
+  FROM d WHERE app IS NOT NULL AND app <> '' GROUP BY ven, app;
+
+COPY (
+  SELECT d.ven AS SoftwareVendor, d.app AS SoftwareName, d.ver AS SoftwareVersion,
+         count(DISTINCT d.dev) AS Equipos
+  FROM d JOIN tope t ON d.ven IS NOT DISTINCT FROM t.ven AND d.app = t.app
+  WHERE vkey(d.ver) >= t.vmax
+  GROUP BY 1,2,3
+) TO '$(Ruta $Catalogo)' (HEADER, DELIMITER ',');
+
+COPY (
+  SELECT DISTINCT d.dev AS DeviceName, d.usr AS UserName, d.ven AS SoftwareVendor,
+         d.app AS SoftwareName, d.ver AS SoftwareVersion, d.osv AS OSVersionInfo
+  FROM d JOIN tope t ON d.ven IS NOT DISTINCT FROM t.ven AND d.app = t.app
+  WHERE vkey(d.ver) < t.vmax
+) TO '$(Ruta $Atrasados)' (HEADER, DELIMITER ',');
+"@
+
+$tmp = Join-Path $env:TEMP ('inv-' + [guid]::NewGuid().ToString('N') + '.sql')
+Set-Content -Path $tmp -Value $sql -Encoding UTF8
+
+Write-Host ''
+Write-Host 'Convirtiendo a Parquet y resumiendo...' -ForegroundColor Cyan
+$reloj = [Diagnostics.Stopwatch]::StartNew()
+& $Duck -c ".read $(Ruta $tmp)"
+$codigo = $LASTEXITCODE
+$reloj.Stop()
+Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+if ($codigo -ne 0) { throw "DuckDB termino con codigo $codigo" }
+
+function Filas { param([string]$P) if (-not (Test-Path $P)) { return 0 }; $n = 0; foreach ($l in [IO.File]::ReadLines($P)) { $n++ }; return [Math]::Max(0, $n - 1) }
+function Mb { param([string]$P) if (Test-Path $P) { (Get-Item $P).Length / 1MB } else { 0 } }
+
+Write-Host ''
+Write-Host ("Listo en {0:n1} s" -f $reloj.Elapsed.TotalSeconds) -ForegroundColor Green
+Write-Host ("  {0,10:n1} MB  ->  {1,8:n1} MB en Parquet  ({2:n0}x mas pequeno)" -f (Mb $Ruta), (Mb $Parquet), ((Mb $Ruta) / [Math]::Max(0.01, (Mb $Parquet)))) -ForegroundColor Green
+Write-Host ("  {0,10:n0} equipos          -> parque.csv" -f (Filas $Parque)) -ForegroundColor Green
+Write-Host ("  {0,10:n0} app+version      -> catalogo.csv" -f (Filas $Catalogo)) -ForegroundColor Green
+Write-Host ("  {0,10:n0} atrasados        -> atrasados.csv" -f (Filas $Atrasados)) -ForegroundColor Green
+Write-Host ''
+Write-Host 'Arrastra los TRES csv al tablero, a la vez.' -ForegroundColor Cyan
+Write-Host ''
+Write-Host 'Y para preguntarle cualquier otra cosa a los datos:' -ForegroundColor DarkGray
+Write-Host ("  {0} -c ""SELECT * FROM '{1}' LIMIT 10""" -f $Duck, $Parquet) -ForegroundColor DarkGray
+`;
+}
+
 /* ---- 24.5c resumir un detalle enorme sin abrirlo -------------------------
    El detalle crudo de un parque grande no cabe en el navegador, pero lo que el
    tablero necesita de el si: el catalogo agregado y el parque. Los dos salen de
@@ -5368,74 +5561,6 @@ function vDatos(A, rows) {
     sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo. Puedes quitar el que hayas cargado por error') +
     fuentes +
     '<div id="anclaConsultas"></div>' +
-    sec('Consultas', 'Generadas desde tu estándar. Pégalas en Advanced Hunting o ejecútalas desde aquí') +
-    `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
-      <b>Empieza por el catálogo.</b> La consulta de excepciones compara contra la versión aprobada, y esa
-      versión sale de los datos que ya tengas cargados. Si el estándar se calculó sobre una muestra pequeña,
-      apuntará demasiado alto y las excepciones serán medio parque.
-      El orden que funciona es: <b>parque → catálogo → cargar ambos → volver aquí</b>, y solo entonces
-      generar las excepciones. Con el estándar ya recalculado sobre el parque real, suelen caber sin trocear.
-    </div></div>`+
-    `<div class="card">
-      <div class="row" style="margin-bottom:12px">
-        ${Object.keys(KQL).map(k => `<button class="tbtn" data-kql="${k}" aria-pressed="${k === sel}">${esc(KQL[k].l)}</button>`).join('')}
-        <span class="spacer"></span>
-        <button class="btn" data-kqlact="graph" title="Copia el cuerpo JSON listo para pegar en Graph Explorer">Cuerpo JSON</button>
-        <button class="btn" data-kqlact="contar" title="Genera una variante que solo devuelve el número de filas">Contar filas</button>
-        <button class="btn" data-kqlact="diagnostico" title="Trocea la consulta en pasos para localizar cuál falla">Diagnóstico</button>
-        <button class="btn" data-kqlact="copiar">Copiar</button>
-        <button class="btn" data-kqlact="restaurar">Restaurar</button>
-      </div>
-      <div class="row" style="margin-bottom:12px;padding:9px 12px;border:1px solid var(--line);
-           border-radius:9px;background:var(--surface-2)">
-        <span class="mini" style="color:var(--ink-2);font-weight:600">Dividir en lotes</span>
-        <input type="number" min="1" max="64" value="${loteN()}" data-cfg="kql.lotes"
-               style="width:72px;background:var(--surface-1);border:1px solid var(--line);border-radius:7px;
-                      padding:5px 8px;font-size:12.5px;color:var(--ink)">
-        ${loteN() > 1 ? `
-          <button class="btn" data-lote="-1" style="padding:5px 11px">◀</button>
-          <b class="mono" style="min-width:96px;text-align:center">Lote ${loteI() + 1} de ${loteN()}</b>
-          <button class="btn" data-lote="1" style="padding:5px 11px">▶</button>
-          <span class="mini">Exporta uno, avanza y repite. Súbelos todos juntos al tablero.</span>`
-        : `<span class="mini">Si la consola dice que superas el límite de 100.000 filas, sube este número.</span>`}
-      </div>
-      <p class="mini" style="margin:0 0 10px">${esc(KQL[sel] ? KQL[sel].d : '')}</p>
-      ${sel === 'excepciones' ? `
-      <div class="row" style="margin-bottom:12px;padding:9px 12px;border:1px solid var(--line);
-           border-radius:9px;background:var(--surface-2)">
-        <span class="mini" style="color:var(--ink-2);font-weight:600">Aplicaciones incluidas</span>
-        <select class="fsel" data-cfg="kql.alcanceExc" style="max-width:none">
-          <option value="estandar"${excAlcance() === 'estandar' ? ' selected' : ''}>Solo las que gobiernas (${fmt(excDatatable(true).length)})</option>
-          <option value="catalogo"${excAlcance() === 'catalogo' ? ' selected' : ''}>Todas las de mi catálogo (${fmt(excDatatable(false).length)})</option>
-          <option value="todas"${excAlcance() === 'todas' ? ' selected' : ''}>Todas las del inventario</option>
-        </select>
-        <span class="mini">${excAlcance() === 'todas'
-          ? 'La versión aprobada se calcula en la consulta: la más alta detectada de cada aplicación. Es el criterio estricto y devuelve muchas más filas — usa «Contar filas» antes de exportar.'
-          : excAlcance() === 'catalogo'
-          ? 'Usa tu estándar editado para todas las aplicaciones que tengan versión aprobada.'
-          : 'Solo las administradas, críticas y no permitidas.'}</span>
-      </div>` : ''}
-      <textarea id="kqlBox" data-kqlsave="${sel}" spellcheck="false"
-        style="width:100%;min-height:230px;background:var(--surface-2);border:1px solid var(--line);
-               border-radius:9px;padding:12px;font-family:ui-monospace,Consolas,monospace;font-size:12px;
-               color:var(--ink);line-height:1.55;resize:vertical">${esc(texto)}</textarea>
-      <div class="fld" style="margin-top:12px">
-        <label for="kqlFiltro">Filtro de equipos · una condición por línea (se inserta en las tres consultas)</label>
-        <textarea id="kqlFiltro" data-cfg="kql.filtro" spellcheck="false" rows="3"
-          placeholder='| where DeviceType == "Workstation"&#10;| where DomainName == "BANCOLOMBIA"'
-          style="width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
-                 padding:9px 11px;font-family:ui-monospace,Consolas,monospace;font-size:12px;
-                 color:var(--ink);line-height:1.6;resize:vertical">${esc(kqlFiltro())}</textarea>
-        <span class="hint">Escribe tantas condiciones como necesites, cada una en su línea. Por ejemplo:
-          <code>| where DeviceType == "Workstation"</code>,
-          <code>| where DomainName == "BANCOLOMBIA"</code>,
-          <code>| where MachineGroup == "..."</code>,
-          <code>| where DeviceName startswith "pb0b"</code>.
-          <b>No pongas <code>sort by</code></b>: si la exportación se corta, el recorte caerá siempre en el
-          mismo tramo del alfabeto y el análisis saldrá sesgado.</span>
-      </div>
-    </div>` +
-    '<div id="anclaConexion"></div>' +
     sec('Identificadores de la aplicación', 'Los mismos para los dos scripts y para la conexión en página. Ninguno es secreto') +
     `<div class="adm-grid">
       <div class="card"><div class="card-h"><div><h3>De dónde salen</h3>
@@ -5484,135 +5609,6 @@ function vDatos(A, rows) {
         </ul>
       </div>
     </div>` +
-    sec('Graph Explorer', 'La herramienta web de Microsoft. No requiere registrar nada ni instalar nada') +
-    `<div class="adm-grid">
-      <div class="card"><div class="card-h"><div><h3>Ejecutar en Graph Explorer</h3>
-        <p>Usa la aplicación de Microsoft, no la tuya</p></div></div>
-        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
-          <ol style="margin:0;padding-left:20px">
-            <li>Abre <a href="https://developer.microsoft.com/graph/graph-explorer" target="_blank"
-                rel="noopener" style="color:var(--brand)">Graph Explorer</a> e inicia sesión con tu cuenta.</li>
-            <li>Método <b>POST</b>, versión <b>v1.0</b>, y esta dirección:
-              <div class="mono mini" style="background:var(--surface-2);border:1px solid var(--line);
-                   border-radius:7px;padding:7px 10px;margin:6px 0;word-break:break-all">https://graph.microsoft.com/v1.0/security/runHuntingQuery</div></li>
-            <li>En la pestaña <b>Request body</b> pega el cuerpo: botón <b>Cuerpo JSON</b> arriba, en Consultas.</li>
-            <li>En <b>Modify permissions</b> concede <code>ThreatHunting.Read.All</code>.</li>
-            <li><b>Run query</b>, copia la respuesta y pégala aquí abajo.</li>
-          </ol>
-        </div>
-      </div>
-      <div class="card"><div class="card-h"><div><h3>Pegar la respuesta</h3>
-        <p>El JSON que devuelve Graph Explorer entra directo al modelo</p></div></div>
-        <div style="margin-top:14px">
-          <textarea id="gxPegar" spellcheck="false" placeholder='{ "results": [ { "DeviceName": "...", ... } ] }'
-            style="width:100%;min-height:150px;background:var(--surface-2);border:1px solid var(--line);
-                   border-radius:9px;padding:11px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;
-                   color:var(--ink);line-height:1.5;resize:vertical"></textarea>
-          <div class="row" style="margin-top:10px">
-            <select class="fsel" id="gxNombre" style="max-width:none">
-              <option value="parque">Es el parque de equipos</option>
-              <option value="catalogo" selected>Es el catálogo agregado</option>
-              <option value="excepciones">Son las excepciones</option>
-              <option value="otro">Otro</option>
-            </select>
-            <label class="chk"><input type="checkbox" id="gxReset"> Reemplazar lo cargado</label>
-            <button class="btn btn-p" data-gx="pegar" style="margin-left:auto">Cargar respuesta</button>
-          </div>
-          <p class="mini" style="margin-top:10px">La forma se detecta sola por las columnas; el nombre es solo
-            para reconocerlo en la lista de fuentes. Si la respuesta es muy larga, Graph Explorer puede tardar
-            en mostrarla: usa <b>Contar filas</b> antes para saber a qué te enfrentas.</p>
-        </div>
-      </div>
-    </div>` +
-    sec('Extraer con tu cuenta', 'Sin registrar ninguna aplicación: el módulo oficial de Microsoft ya trae la suya') +
-    `<div class="adm-grid">
-      <div class="card"><div class="card-h"><div><h3>Script de PowerShell</h3>
-        <p>Un comando, inicias sesión y deja los CSV listos</p></div></div>
-        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.65">
-          <p style="margin:0 0 12px">El script usa <b>Microsoft.Graph.Authentication</b>, el módulo oficial.
-          Ese módulo <b>ya está registrado por Microsoft</b>, así que no creas ninguna aplicación en Entra:
-          solo inicias sesión con tu cuenta de siempre. Lanza tus tres consultas y escribe los CSV en una
-          carpeta <code>salida</code>, que arrastras aquí de una vez.</p>
-          <div class="fld"><label for="psModo">Cómo se autentica</label>
-            <select id="psModo">
-              <option value="aplicacion">Permiso de aplicación · client secret (sin usuario)</option>
-              <option value="dispositivo">Mi registro · código de dispositivo (permiso delegado)</option>
-              <option value="microsoft">App de Microsoft · módulo Graph (permiso delegado)</option>
-            </select>
-            <span class="hint" id="psAyuda">${AYUDA_MODO.aplicacion}</span>
-          </div>
-          <div class="fld"><label for="psLotes">Lotes del detalle completo (0 = no traerlo)</label>
-            <input id="psLotes" type="number" min="0" max="64" value="0">
-            <span class="hint">Solo si necesitas el inventario crudo. Con tu parque son ~1,3 millones de filas:
-              tráelo acotado a un grupo con el filtro de arriba.</span></div>
-          <button class="btn btn-p" data-gx="ps">Descargar extraer-defender.ps1</button>
-        </div>
-      </div>
-      <div class="card"><div class="card-h"><div><h3>Qué hace, paso a paso</h3>
-        <p>Para que no ejecutes nada a ciegas</p></div></div>
-        <ol style="margin:14px 0 0;padding-left:20px;font-size:12.5px;color:var(--ink-3);line-height:1.8">
-          <li>Instala el módulo de autenticación de Microsoft si no lo tienes (solo para tu usuario).</li>
-          <li>Abre la ventana de inicio de sesión de Microsoft. <b>Tus credenciales no pasan por el script</b>.</li>
-          <li>Lanza las consultas contra <code>security/runHuntingQuery</code>.</li>
-          <li>Guarda un CSV por consulta y cierra la sesión.</li>
-        </ol>
-        <div class="banner" style="margin:14px 0 0">${ico('shield')}<div>
-          La primera vez, un administrador debe consentir el permiso <b>ThreatHunting.Read.All</b>
-          para Microsoft Graph PowerShell. El propio diálogo de inicio de sesión ofrece el botón.
-          No es un registro de aplicación: es aprobar una que ya existe.
-        </div></div>
-      </div>
-    </div>` +
-    sec('HP Workforce Experience', 'Tu cuenta, sin secreto y sin tope de filas: es el camino con menos trámite de los tres') +
-    `<div class="adm-grid">
-      <div class="card"><div class="card-h"><div><h3>Script de extracción</h3>
-        <p>Inicias sesión una vez; a partir de ahí va solo</p></div></div>
-        <div style="margin-top:14px">
-          <div class="fld"><label for="hpMail">Tu correo corporativo</label>
-            <input id="hpMail" data-cfg="hp.correo" value="${esc((CFG.hp || {}).correo || '')}"
-                   placeholder="nombre@empresa.com" spellcheck="false">
-            <span class="hint">El que usas en Workforce Experience, no el personal.</span></div>
-          <div class="fld"><label for="hpRegion">Región de tu tenant</label>
-            <select id="hpRegion" data-cfg="hp.region">
-              <option value="us"${((CFG.hp || {}).region || 'us') === 'us' ? ' selected' : ''}>Estados Unidos</option>
-              <option value="eu"${(CFG.hp || {}).region === 'eu' ? ' selected' : ''}>Europa</option>
-              <option value="au"${(CFG.hp || {}).region === 'au' ? ' selected' : ''}>Australia</option>
-            </select></div>
-          <button class="btn btn-p" data-gx="hp">Descargar extraer-hp.ps1</button>
-          <p class="mini" style="margin-top:12px">Al ejecutarlo te abre el navegador, inicias sesión y pegas
-            la URL a la que te lleva. Eso es <b>todo</b>, y solo la primera vez: la sesión queda guardada
-            cifrada en tu equipo y las siguientes ejecuciones no preguntan nada.</p>
-        </div>
-      </div>
-      <div class="card"><div class="card-h"><div><h3>Por qué esto es un script y no un botón</h3>
-        <p>Lo comprobé antes de escribirlo</p></div></div>
-        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
-          <p style="margin:0 0 10px">La pasarela de HP filtra por cabecera <code>Origin</code>. La misma
-            llamada responde <b>200</b> desde el portal de HP y <b>403</b> desde cualquier otro sitio.
-            Un navegador siempre manda <code>Origin</code>; un script no, y por eso sí pasa.</p>
-          <p style="margin:0 0 10px">No es una limitación del tablero: <b>ninguna</b> página web podría
-            hablar con esa API.</p>
-          <div class="banner" style="margin:0">${ico('shield')}<div>
-            El <i>refresh token</i> se guarda cifrado con DPAPI, junto al script: solo lo puede leer tu
-            usuario en tu equipo. No pasa por esta página ni por el repositorio.
-          </div></div>
-        </div>
-      </div>
-      <div class="card"><div class="card-h"><div><h3>Qué trae, y qué hay que mirar</h3>
-        <p>El script te lista tus tablas al arrancar</p></div></div>
-        <div style="margin-top:14px;font-size:12.5px;color:var(--ink-3);line-height:1.7">
-          <p style="margin:0 0 10px"><b>Sin tope de filas.</b> El lenguaje de consulta pagina con
-            <code>limit</code> y <code>skip</code>, así que el script recorre todo. Es lo que resuelve el
-            corte de 135.000 filas del export de la consola, que solo cubría 1.332 de 25.875 equipos.</p>
-          <p style="margin:0 0 10px">Saca <b>catálogo agregado con desglose por versión</b> —lo que al
-            Excel le faltaba—, <b>detalle por equipo</b> y <b>parque</b>.</p>
-          <p style="margin:0">Lo que hay que comprobar: si entre tus tablas aparece
-            <code>SoftwareInventory</code>, tienes lo instalado. Si solo están las de
-            <code>...Utilization</code>, eso mide lo que se ha <b>usado</b>, que no es lo mismo.
-            El script lo detecta, escoge la mejor y te avisa.</p>
-        </div>
-      </div>
-    </div>` +
     sec('Intune', 'El camino sin tope de filas: los informes se entregan como archivo, no como respuesta') +
     `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
       <b>Intune no tiene el límite de 100.000 filas.</b> Advanced Hunting responde a una consulta y ahí
@@ -5652,7 +5648,7 @@ function vDatos(A, rows) {
           <p style="margin:0 0 10px">El navegador no puede con el detalle crudo entero. No es cuestión de
             optimizar: reservar el archivo y decodificarlo a texto lo <b>duplica</b>, porque las cadenas de
             JavaScript son UTF-16. Por encima de <b>400&nbsp;MB</b> el tablero ni lo intenta.</p>
-          <p style="margin:0 0 12px">Pero abrirlo entero no hace falta. <code>resumir-detalle.ps1</code> lo
+          <p style="margin:0 0 12px">Pero abrirlo entero no hace falta. <code>preparar-duckdb.ps1</code> lo
             recorre <b>en tu equipo</b>, sin cargarlo en memoria, y saca de él lo que el tablero sí usa:
             el catálogo y el parque. De gigabytes salen unos pocos MB, <b>sin perder ningún equipo ni
             ninguna versión</b>.</p>
@@ -5661,7 +5657,8 @@ function vDatos(A, rows) {
             atrasados, pero no <i>cuáles</i>, y la tabla «Equipos con esta aplicación» sale vacía.
             Solo lleva lo que va por detrás de la versión más alta, que es una fracción pequeña
             del archivo.</p>
-          <button class="btn" data-gx="resumir">Descargar resumir-detalle.ps1</button>
+          <button class="btn btn-p" data-gx="duck">Descargar preparar-duckdb.ps1</button>
+          <button class="btn" data-gx="resumir" style="margin-left:8px">Version sin DuckDB</button>
         </div>
       </div>
       <div class="card"><div class="card-h"><div><h3>Qué permiso necesita</h3>
@@ -5681,61 +5678,6 @@ function vDatos(A, rows) {
           millón de filas y puede pasar de diez minutos generándose. El script espera solo, con puntos.
           <b>No lo cargues entero en el tablero</b>: el navegador no aguanta ese detalle. Para el análisis
           usa parque + catálogo, y el detalle solo acotado con el filtro.
-        </div></div>
-      </div>
-    </div>` +
-    sec('Conexión desde la página', 'Opción avanzada: requiere registrar una aplicación en Entra ID') +
-    `<div class="banner" style="margin-bottom:16px">${ico('info')}<div>
-      <b>Esto sí exige un registro.</b> Para que una página web reciba un token, Entra ID necesita saber
-      qué aplicación lo pide y a qué dirección puede devolverlo; si no, cualquier web podría pedir tokens
-      para tu tenant. No hay forma de saltárselo. Si prefieres no registrar nada, usa el script de arriba:
-      hace exactamente lo mismo.
-    </div></div>`+
-    `<div class="adm-grid">
-      <div class="card"><div class="card-h"><div><h3>Registro de la aplicación</h3>
-        <p>Un formulario de cinco minutos en Entra ID. Ninguno de estos valores es secreto</p></div></div>
-        <div style="margin-top:14px">
-          <p class="mini" style="margin:0 0 12px">El <b>Application ID</b> y el <b>Directory ID</b> se
-            rellenan arriba, en <i>Identificadores de la aplicación</i>: son los mismos para los tres
-            caminos. Lo único propio de este es la URI de aquí abajo.</p>
-          <div class="fld"><label>URI de redirección que debes registrar</label>
-            <input value="${esc(redirectUri())}" readonly onclick="this.select()"
-                   style="color:var(--brand)"></div>
-          <div class="row">
-            ${on ? `<button class="btn" data-gx="salir">Cerrar sesión</button>
-                    <span class="sem ok">Conectado</span>`
-                 : `<button class="btn btn-p" data-gx="entrar"${listo ? '' : ' disabled style="opacity:.5"'}>Conectar con Defender</button>
-                    <span class="sem off">${listo ? 'Sin conectar' : 'Faltan los identificadores'}</span>`}
-          </div>
-        </div>
-      </div>
-      <div class="card"><div class="card-h"><div><h3>Traer datos</h3>
-        <p>Elige qué consultas ejecutar; la página funde el resultado</p></div></div>
-        <div style="margin-top:14px">
-          <label class="chk" style="margin-bottom:8px"><input type="checkbox" id="gxParque" checked> Parque de equipos</label><br>
-          <label class="chk" style="margin-bottom:8px"><input type="checkbox" id="gxCatalogo" checked> Catálogo agregado</label><br>
-          <label class="chk" style="margin-bottom:12px"><input type="checkbox" id="gxExcepciones" checked> Excepciones</label>
-          <div class="fld"><label for="gxLotes">Lotes para el detalle completo (0 = no traerlo)</label>
-            <input id="gxLotes" type="number" min="0" max="64" value="0">
-            <span class="hint">El detalle crudo de un parque grande no cabe en el navegador:
-              1,3 millones de filas tumban la pestaña. Úsalo solo con un filtro que acote a un grupo.</span></div>
-          <button class="btn btn-p" data-gx="traer"${on ? '' : ' disabled style="opacity:.5"'}>Ejecutar y cargar</button>
-          <div id="gxLog" class="mini" style="margin-top:12px;font-family:ui-monospace,Consolas,monospace;
-               max-height:170px;overflow:auto;line-height:1.7"></div>
-        </div>
-      </div>
-      <div class="card"><div class="card-h"><div><h3>Cómo registrar la aplicación</h3>
-        <p>Una sola vez</p></div></div>
-        <ol style="margin:14px 0 0;padding-left:20px;font-size:12.5px;color:var(--ink-3);line-height:1.75">
-          <li>Portal de Azure → <b>Microsoft Entra ID</b> → <b>App registrations</b> → <b>New registration</b>.</li>
-          <li>Plataforma <b>Single-page application (SPA)</b> y como URI de redirección la de arriba.</li>
-          <li>En <b>API permissions</b>, permiso <b>delegado</b> de Microsoft Graph:
-              <code>ThreatHunting.Read.All</code>. Pulsa <b>Grant admin consent</b>.</li>
-          <li>Copia aquí el <b>Application (client) ID</b> y el <b>Directory (tenant) ID</b>.</li>
-        </ol>
-        <div class="banner" style="margin:14px 0 0">${ico('shield')}<div>
-          No se crea ningún <i>client secret</i>. El token se emite a tu cuenta, vive en la memoria de esta
-          pestaña y se pierde al cerrarla. La página solo puede ver lo que tú ya puedes ver.
         </div></div>
       </div>
     </div>`;
@@ -6293,25 +6235,8 @@ async function doExport(kind) {
 
 /* ---- acciones de la conexión con Defender ---- */
 async function gxAction(a) {
-  if (a === 'pegar') {
-    const txt = ($('#gxPegar') || {}).value || '';
-    if (!txt.trim()) { toast('Pega antes la respuesta de Graph Explorer'); return; }
-    const nombres = { parque: 'parque (Graph)', catalogo: 'catálogo (Graph)',
-                      excepciones: 'excepciones (Graph)', otro: 'respuesta de Graph' };
-    try {
-      const src = cargarRespuestaGraph(txt, nombres[($('#gxNombre') || {}).value] || 'respuesta de Graph',
-                                       ($('#gxReset') || {}).checked);
-      $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
-      toast(`Cargado: ${fmt(src.filas)} filas (${src.shape})`);
-      render();
-    } catch (e) { toast(e.message); }
-    return;
-  }
-  if (a === 'hp') {
-    const correo = (($('#hpMail') || {}).value || '').trim();
-    if (!correo) { toast('Pon antes tu correo corporativo'); return; }
-    const region = ($('#hpRegion') || {}).value || 'us';
-    return saveFile('extraer-hp.ps1', scriptHP(correo, region), 'text/plain;charset=utf-8');
+  if (a === 'duck') {
+    return saveFile('preparar-duckdb.ps1', scriptDuck(), 'text/plain;charset=utf-8');
   }
   if (a === 'resumir') {
     return saveFile('resumir-detalle.ps1', scriptResumir(), 'text/plain;charset=utf-8');
@@ -6324,38 +6249,6 @@ async function gxAction(a) {
     if (!opts.parque && !opts.catalogo && !opts.detalle) { toast('Marca al menos un informe'); return; }
     const modo = ($('#inModo') || {}).value || 'aplicacion';
     return saveFile('extraer-intune.ps1', scriptIntune(opts, modo), 'text/plain;charset=utf-8');
-  }
-  if (a === 'ps') {
-    const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));
-    const modo = ($('#psModo') || {}).value || 'aplicacion';
-    return saveFile('extraer-defender.ps1', scriptPowerShell(lotes, modo), 'text/plain;charset=utf-8');
-  }
-  if (a === 'entrar') return conectar();
-  if (a === 'salir') return desconectar();
-  if (a === 'traer') {
-    const cuales = [];
-    if ($('#gxParque').checked) cuales.push('parque');
-    if ($('#gxCatalogo').checked) cuales.push('catalogo');
-    if ($('#gxExcepciones').checked) cuales.push('excepciones');
-    const lotes = Math.max(0, Math.min(64, +$('#gxLotes').value || 0));
-    if (lotes) cuales.push('detalle');
-    if (!cuales.length) { toast('Marca al menos una consulta'); return; }
-    const btn = $('[data-gx="traer"]');
-    btn.disabled = true; btn.textContent = 'Consultando…';
-    $('#gxLog').innerHTML = '';
-    try {
-      const n = await traerDeDefender(cuales, lotes);
-      $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
-      toast(fmt(n) + ' filas cargadas desde Defender');
-      render();
-    } catch (e) {
-      $('#gxLog').innerHTML += '<span style="color:var(--crit-ink)">✖ ' + esc(e.message) + '</span>';
-      toast('No se pudo consultar');
-    } finally {
-      const b = $('[data-gx="traer"]');
-      if (b) { b.disabled = false; b.textContent = 'Ejecutar y cargar'; }
-    }
-    return;
   }
 }
 

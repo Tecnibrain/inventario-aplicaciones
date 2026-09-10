@@ -551,25 +551,8 @@ async function doExport(kind) {
 
 /* ---- acciones de la conexión con Defender ---- */
 async function gxAction(a) {
-  if (a === 'pegar') {
-    const txt = ($('#gxPegar') || {}).value || '';
-    if (!txt.trim()) { toast('Pega antes la respuesta de Graph Explorer'); return; }
-    const nombres = { parque: 'parque (Graph)', catalogo: 'catálogo (Graph)',
-                      excepciones: 'excepciones (Graph)', otro: 'respuesta de Graph' };
-    try {
-      const src = cargarRespuestaGraph(txt, nombres[($('#gxNombre') || {}).value] || 'respuesta de Graph',
-                                       ($('#gxReset') || {}).checked);
-      $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
-      toast(`Cargado: ${fmt(src.filas)} filas (${src.shape})`);
-      render();
-    } catch (e) { toast(e.message); }
-    return;
-  }
-  if (a === 'hp') {
-    const correo = (($('#hpMail') || {}).value || '').trim();
-    if (!correo) { toast('Pon antes tu correo corporativo'); return; }
-    const region = ($('#hpRegion') || {}).value || 'us';
-    return saveFile('extraer-hp.ps1', scriptHP(correo, region), 'text/plain;charset=utf-8');
+  if (a === 'duck') {
+    return saveFile('preparar-duckdb.ps1', scriptDuck(), 'text/plain;charset=utf-8');
   }
   if (a === 'resumir') {
     return saveFile('resumir-detalle.ps1', scriptResumir(), 'text/plain;charset=utf-8');
@@ -582,38 +565,6 @@ async function gxAction(a) {
     if (!opts.parque && !opts.catalogo && !opts.detalle) { toast('Marca al menos un informe'); return; }
     const modo = ($('#inModo') || {}).value || 'aplicacion';
     return saveFile('extraer-intune.ps1', scriptIntune(opts, modo), 'text/plain;charset=utf-8');
-  }
-  if (a === 'ps') {
-    const lotes = Math.max(0, Math.min(64, +($('#psLotes') || {}).value || 0));
-    const modo = ($('#psModo') || {}).value || 'aplicacion';
-    return saveFile('extraer-defender.ps1', scriptPowerShell(lotes, modo), 'text/plain;charset=utf-8');
-  }
-  if (a === 'entrar') return conectar();
-  if (a === 'salir') return desconectar();
-  if (a === 'traer') {
-    const cuales = [];
-    if ($('#gxParque').checked) cuales.push('parque');
-    if ($('#gxCatalogo').checked) cuales.push('catalogo');
-    if ($('#gxExcepciones').checked) cuales.push('excepciones');
-    const lotes = Math.max(0, Math.min(64, +$('#gxLotes').value || 0));
-    if (lotes) cuales.push('detalle');
-    if (!cuales.length) { toast('Marca al menos una consulta'); return; }
-    const btn = $('[data-gx="traer"]');
-    btn.disabled = true; btn.textContent = 'Consultando…';
-    $('#gxLog').innerHTML = '';
-    try {
-      const n = await traerDeDefender(cuales, lotes);
-      $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
-      toast(fmt(n) + ' filas cargadas desde Defender');
-      render();
-    } catch (e) {
-      $('#gxLog').innerHTML += '<span style="color:var(--crit-ink)">✖ ' + esc(e.message) + '</span>';
-      toast('No se pudo consultar');
-    } finally {
-      const b = $('[data-gx="traer"]');
-      if (b) { b.disabled = false; b.textContent = 'Ejecutar y cargar'; }
-    }
-    return;
   }
 }
 
