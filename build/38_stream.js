@@ -141,6 +141,7 @@ async function importarGrande(file, opts, onProg) {
   // El File es un puntero al archivo en disco, no una copia: guardarlo no cuesta
   // memoria y permite volver a recorrerlo despues para una aplicacion concreta.
   M.archivo = file;
+  M.esParquet = false;      // con que lector se leyo, para poder repetirlo
   M.completo = completos.slice();
 
   const { sep, headers } = await cabeceraDe(file);
@@ -223,7 +224,7 @@ async function importarGrande(file, opts, onProg) {
     porApp.set(ka, (porApp.get(ka) || 0) + n);
   });
 
-  const MAX = opts.maxExcep || 500000;
+  const MAX = opts.maxExcep || TOPE_DETALLE;
   const orden = Array.from(porApp.entries()).sort((a, b) => b[1] - a[1]);
   const dentro = new Set();
   let acumulado = 0;
@@ -278,6 +279,22 @@ async function importarGrande(file, opts, onProg) {
    --------------------------------------------------------------------------- */
 
 /** Los primeros y ultimos cuatro bytes de un Parquet son «PAR1». */
+/**
+ * Cuantas filas de detalle -las que llevan nombre de equipo- caben.
+ *
+ * El resto de aplicaciones se cuentan igual en el catalogo, pero sin nombres:
+ * se ve cuantos equipos la tienen, no cuales. El boton «Traer los equipos de
+ * esta aplicacion» recorre el archivo otra vez para una en concreto.
+ *
+ * El numero era 500.000 porque cada fila costaba 638 bytes como objeto y eso ya
+ * eran 320 MB. Guardadas por columnas cuestan 105, asi que lo que manda ahora
+ * no es la memoria sino el tiempo de dibujar: medido, agregar y calcular
+ * cumplimiento salen a 2,5 microsegundos por fila, o sea unos 2,5 s para un
+ * millon. Se paga una vez al cargar -despues queda en cache- y a cambio casi
+ * ninguna aplicacion se queda sin nombres.
+ */
+const TOPE_DETALLE = 1000000;
+
 function esParquet(buf) {
   const u = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
   return u.length === 4 && u[0] === 0x50 && u[1] === 0x41 && u[2] === 0x52 && u[3] === 0x31;
@@ -305,6 +322,7 @@ async function importarParquet(file, opts, onProg) {
   const aviso = (frac, filas, fase) => onProg && onProg(frac, filas, fase);
 
   M.archivo = file;
+  M.esParquet = true;       // con que lector se leyo, para poder repetirlo
   M.completo = completos.slice();
 
   const origen = bufferDe(file);
@@ -414,7 +432,7 @@ async function importarParquet(file, opts, onProg) {
     const ka = p[0] + SEP1 + p[1];
     porApp.set(ka, (porApp.get(ka) || 0) + n);
   });
-  const MAX = opts.maxExcep || 500000;
+  const MAX = opts.maxExcep || TOPE_DETALLE;
   const orden = Array.from(porApp.entries()).sort((a, b) => b[1] - a[1]);
   const dentro = new Set();
   let acumulado = 0;

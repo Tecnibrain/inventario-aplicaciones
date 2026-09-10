@@ -23,10 +23,12 @@
    area y eos vienen sin nada, y son dieciseis bytes por fila que no se pagan.
    ========================================================================== */
 
-/** Diccionario de valores: da un entero por valor, y el valor por su entero. */
-function Interno() {
+/** Diccionario de valores: da un entero por valor, y el valor por su entero.
+ *  Con una lista ya hecha se vuelve a montar sin recorrer ningun dato. */
+function Interno(guardados) {
   const map = new Map();
-  const vals = [];
+  const vals = guardados || [];
+  for (let k = 0; k < vals.length; k++) map.set(vals[k], k);
   return {
     vals,
     id(v) {
@@ -41,9 +43,9 @@ function Interno() {
 }
 
 /** Columna de enteros que crece sola, doblando como cualquier array dinamico. */
-function Columna(cap) {
-  let a = new Int32Array(cap || 4096);
-  let n = 0;
+function Columna(cap, datos, largo) {
+  let a = datos || new Int32Array(cap || 4096);
+  let n = largo || 0;
   return {
     push(v) {
       if (n === a.length) { const b = new Int32Array(a.length * 2); b.set(a); a = b; }
@@ -75,11 +77,25 @@ const ES_EOS  = s => /^(eos|endofsupport|fuera|expired|caducad|sin soporte|true|
 const ES_CPE  = s => !!s && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(s);
 const ES_VUNK = s => VER_UNK.test(s || '(sin versión)');
 
-function Tabla() {
+function Tabla(guardado) {
   const dic = {}, col = {};
   for (const c of CAMPOS_TXT) { dic[c] = Interno(); col[c] = null; }
-  const w = Columna(), dia = Columna();
+  let w = Columna(), dia = Columna();
   let n = 0;
+
+  // Volver a montar una tabla guardada no cuesta nada: los enteros ya estan
+  // calculados y las columnas son los mismos arrays que se escribieron.
+  if (guardado) {
+    n = guardado.n;
+    for (const c of CAMPOS_TXT) {
+      const g = guardado.campos[c];
+      if (!g) continue;
+      dic[c] = Interno(g.vals);
+      col[c] = Columna(0, g.a, n);
+    }
+    w = Columna(0, guardado.w, n);
+    dia = Columna(0, guardado.dia, n);
+  }
 
   // Lo que solo depende del valor se resuelve una vez por valor distinto, no
   // por fila. Se cachea junto al diccionario.
@@ -210,6 +226,20 @@ function Tabla() {
       o.ts = T.fecha(i);
       o.day = o.ts ? dayKey(o.ts) : '';
       return o;
+    },
+
+    /**
+     * Todo lo que hace falta para volver a montarla igual.
+     *
+     * Son arrays de enteros y listas de cadenas, que es lo que el navegador
+     * sabe guardar tal cual. Pasarlo por JSON multiplicaria por cuatro el
+     * tamano y por mucho mas el tiempo, y no haria falta para nada.
+     */
+    volcado() {
+      const campos = {};
+      for (const c of CAMPOS_TXT)
+        if (col[c]) campos[c] = { vals: dic[c].vals, a: col[c].array.slice(0, n) };
+      return { n, campos, w: w.array.slice(0, n), dia: dia.array.slice(0, n) };
     },
 
     /** Cuanto ocupa, para poder decirlo sin estimar. */

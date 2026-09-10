@@ -28,6 +28,7 @@ PARTES = [
                          # que el modelo: este llama a Tabla() al cargarse, y una
                          # const en zona muerta reventaria el arranque.
     '36_model.js',       # modelo multifuente: detalle, agregado y parque
+    '37_guardado.js',    # lo cargado se queda: el modelo, guardado en el navegador
     '38_stream.js',      # lectura por trozos de archivos que no caben en memoria
     '39_parquet.js',    # lector de Parquet (hyparquet, MIT)
     '40_engine_viz.js',  # agregacion y motor de graficos SVG

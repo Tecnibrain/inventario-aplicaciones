@@ -392,6 +392,11 @@ function vacioSinNombres(key) {
   if (M.archivo) return cabeza +
     `<br><button class="btn btn-p" data-traeapp="${esc(key)}" style="margin-top:12px">` +
     `Traer los equipos de esta aplicación</button>`;
+  // Con los datos recuperados de la copia guardada el archivo ya no esta a
+  // mano, asi que se dice cual era en vez de mandar a un script.
+  if (M.archivoNombre) return cabeza +
+    '<br><span style="font-size:12px">Los datos vienen de la copia guardada en este equipo. ' +
+    `Para traer los equipos de esta aplicación, vuelve a arrastrar <b>${esc(M.archivoNombre)}</b>.</span>`;
   return cabeza + '<br><span style="font-size:12px">Para tenerlos:</span><br>' +
     `<code>.\\resumir-detalle.ps1 -Ruta '...' -Completo '${esc(app)}'</code>`;
 }

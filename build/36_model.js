@@ -17,6 +17,10 @@
 const M = {
   tabla: null, rows: null, devInfo: new Map(), sources: [], headers: [], cols: {},
   fileName: '', sheet: '', mode: 'detalle',
+  // El archivo de origen, para poder volver a recorrerlo. `esParquet` dice con
+  // que lector se leyo: releer un Parquet como texto revienta. `archivoNombre`
+  // es solo el nombre, que es lo que sobrevive a la copia guardada.
+  archivo: null, esParquet: false, archivoNombre: '', completo: [],
   hasGeo: false, hasCliente: false, hasArea: false, hasTime: false, hasUser: false,
   hasEos: false, hasDetalle: false, hasAgregado: false,
   deviceApps: new Map(), latestVer: new Map(), maxDate: null, minDate: null
@@ -101,6 +105,13 @@ function resetModel() {
   M.tabla = Tabla();
   M.rows = Filas(M.tabla, new Int32Array(0));
   M.devInfo = new Map();
+  // El archivo de origen NO se toca aqui: los importadores lo anotan antes de
+  // empezar y llaman a esto a mitad de camino. Se limpia al quitar todo.
+}
+
+/** Olvida tambien de donde venia. Esto es «quitar todos los archivos». */
+function resetOrigen() {
+  M.archivo = null; M.archivoNombre = ''; M.esParquet = false; M.completo = [];
 }
 
 function addSource(grid, fileName, sheet, reset) {

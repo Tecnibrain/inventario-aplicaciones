@@ -1096,10 +1096,12 @@ function detectColumns(headers) {
    area y eos vienen sin nada, y son dieciseis bytes por fila que no se pagan.
    ========================================================================== */
 
-/** Diccionario de valores: da un entero por valor, y el valor por su entero. */
-function Interno() {
+/** Diccionario de valores: da un entero por valor, y el valor por su entero.
+ *  Con una lista ya hecha se vuelve a montar sin recorrer ningun dato. */
+function Interno(guardados) {
   const map = new Map();
-  const vals = [];
+  const vals = guardados || [];
+  for (let k = 0; k < vals.length; k++) map.set(vals[k], k);
   return {
     vals,
     id(v) {
@@ -1114,9 +1116,9 @@ function Interno() {
 }
 
 /** Columna de enteros que crece sola, doblando como cualquier array dinamico. */
-function Columna(cap) {
-  let a = new Int32Array(cap || 4096);
-  let n = 0;
+function Columna(cap, datos, largo) {
+  let a = datos || new Int32Array(cap || 4096);
+  let n = largo || 0;
   return {
     push(v) {
       if (n === a.length) { const b = new Int32Array(a.length * 2); b.set(a); a = b; }
@@ -1148,11 +1150,25 @@ const ES_EOS  = s => /^(eos|endofsupport|fuera|expired|caducad|sin soporte|true|
 const ES_CPE  = s => !!s && !/^(not available|n\/?a|none|null|-|sin dato)$/i.test(s);
 const ES_VUNK = s => VER_UNK.test(s || '(sin versión)');
 
-function Tabla() {
+function Tabla(guardado) {
   const dic = {}, col = {};
   for (const c of CAMPOS_TXT) { dic[c] = Interno(); col[c] = null; }
-  const w = Columna(), dia = Columna();
+  let w = Columna(), dia = Columna();
   let n = 0;
+
+  // Volver a montar una tabla guardada no cuesta nada: los enteros ya estan
+  // calculados y las columnas son los mismos arrays que se escribieron.
+  if (guardado) {
+    n = guardado.n;
+    for (const c of CAMPOS_TXT) {
+      const g = guardado.campos[c];
+      if (!g) continue;
+      dic[c] = Interno(g.vals);
+      col[c] = Columna(0, g.a, n);
+    }
+    w = Columna(0, guardado.w, n);
+    dia = Columna(0, guardado.dia, n);
+  }
 
   // Lo que solo depende del valor se resuelve una vez por valor distinto, no
   // por fila. Se cachea junto al diccionario.
@@ -1285,6 +1301,20 @@ function Tabla() {
       return o;
     },
 
+    /**
+     * Todo lo que hace falta para volver a montarla igual.
+     *
+     * Son arrays de enteros y listas de cadenas, que es lo que el navegador
+     * sabe guardar tal cual. Pasarlo por JSON multiplicaria por cuatro el
+     * tamano y por mucho mas el tiempo, y no haria falta para nada.
+     */
+    volcado() {
+      const campos = {};
+      for (const c of CAMPOS_TXT)
+        if (col[c]) campos[c] = { vals: dic[c].vals, a: col[c].array.slice(0, n) };
+      return { n, campos, w: w.array.slice(0, n), dia: dia.array.slice(0, n) };
+    },
+
     /** Cuanto ocupa, para poder decirlo sin estimar. */
     bytes() {
       let b = (w.bytes + dia.bytes);
@@ -1383,6 +1413,10 @@ function Filas(tabla, idx) {
 const M = {
   tabla: null, rows: null, devInfo: new Map(), sources: [], headers: [], cols: {},
   fileName: '', sheet: '', mode: 'detalle',
+  // El archivo de origen, para poder volver a recorrerlo. `esParquet` dice con
+  // que lector se leyo: releer un Parquet como texto revienta. `archivoNombre`
+  // es solo el nombre, que es lo que sobrevive a la copia guardada.
+  archivo: null, esParquet: false, archivoNombre: '', completo: [],
   hasGeo: false, hasCliente: false, hasArea: false, hasTime: false, hasUser: false,
   hasEos: false, hasDetalle: false, hasAgregado: false,
   deviceApps: new Map(), latestVer: new Map(), maxDate: null, minDate: null
@@ -1467,6 +1501,13 @@ function resetModel() {
   M.tabla = Tabla();
   M.rows = Filas(M.tabla, new Int32Array(0));
   M.devInfo = new Map();
+  // El archivo de origen NO se toca aqui: los importadores lo anotan antes de
+  // empezar y llaman a esto a mitad de camino. Se limpia al quitar todo.
+}
+
+/** Olvida tambien de donde venia. Esto es «quitar todos los archivos». */
+function resetOrigen() {
+  M.archivo = null; M.archivoNombre = ''; M.esParquet = false; M.completo = [];
 }
 
 function addSource(grid, fileName, sheet, reset) {
@@ -1821,6 +1862,157 @@ function recomputeModel() {
 
 /** Compatibilidad: la carga inicial reemplaza, no acumula. */
 function buildModel(grid, fileName, sheet) { return addSource(grid, fileName, sheet, true); }
+/* ============================================================================
+   17c. LO CARGADO SE QUEDA  ·  el inventario, guardado en el navegador
+   ---------------------------------------------------------------------------
+   Recorrer un Parquet de 300 MB tarda medio minuto, y el resultado es siempre
+   el mismo. Volver a hacerlo cada vez que se abre la pagina no tiene sentido:
+   al terminar se guarda el modelo YA MONTADO -las columnas de enteros y los
+   diccionarios, tal cual estan en memoria- y la siguiente vez el tablero abre
+   con los datos puestos, sin archivo y sin espera.
+
+   Donde se guarda importa, y es la razon de que se haga asi:
+
+     · En IndexedDB, que es del navegador y de ESTE equipo. No viaja a ningun
+       servidor, no se sube a ningun sitio y no se publica con la pagina. El
+       archivo index.html que esta en GitHub sigue sin contener un solo dato.
+     · Se borra de un clic desde «Origen de datos», y tambien al quitar todos
+       los archivos.
+
+   Se escribe con el clonado estructurado, que es lo que IndexedDB usa por
+   dentro: los Int32Array, los Map y las fechas se guardan tal cual. Pasarlo por
+   JSON multiplicaria por cuatro el tamano y por mucho mas el tiempo, y ademas
+   habria que volver a interpretarlo al abrir, que es justo lo que se quiere
+   evitar.
+
+   La ficha de que hay guardado va en una clave aparte: preguntar «¿que tienes?»
+   no tiene por que arrastrar cincuenta megas.
+   ========================================================================== */
+const BD_NOMBRE = 'inventario-aplicaciones';
+const BD_ALMACEN = 'modelo';
+const BD_MODELO = 'ultimo';            // el paquete gordo
+const BD_FICHA = 'ficha';              // solo el resumen de que hay
+
+/* Lo que hay guardado ahora mismo, para poder pintarlo sin ir al disco cada vez
+   que se redibuja la vista. null = no hay copia. */
+let GUARDADO = null;
+
+function abrirBD() {
+  return new Promise((ok, mal) => {
+    if (typeof indexedDB === 'undefined') return mal(new Error('este navegador no guarda datos'));
+    let p;
+    try { p = indexedDB.open(BD_NOMBRE, 1); } catch (e) { return mal(e); }
+    p.onupgradeneeded = () => {
+      const db = p.result;
+      if (!db.objectStoreNames.contains(BD_ALMACEN)) db.createObjectStore(BD_ALMACEN);
+    };
+    p.onsuccess = () => ok(p.result);
+    p.onerror = () => mal(p.error || new Error('no se pudo abrir el almacén'));
+    p.onblocked = () => mal(new Error('hay otra pestaña con el inventario abierto'));
+  });
+}
+
+/** Una transaccion, con la base cerrada al salir pase lo que pase. */
+function operaBD(modo, fn) {
+  return abrirBD().then(db => new Promise((ok, mal) => {
+    let pet;
+    try { pet = fn(db.transaction(BD_ALMACEN, modo).objectStore(BD_ALMACEN)); }
+    catch (e) { db.close(); return mal(e); }
+    pet.transaction.oncomplete = () => { db.close(); ok(pet.result); };
+    pet.transaction.onerror = () => { db.close(); mal(pet.transaction.error); };
+    pet.transaction.onabort = () => { db.close(); mal(pet.transaction.error || new Error('escritura cancelada')); };
+  }));
+}
+
+/** Lo que hace falta para volver a montar el modelo, y nada mas. */
+function paqueteModelo() {
+  return {
+    v: 1,
+    guardado: new Date(),
+    archivo: (M.archivo && M.archivo.name) || M.fileName || '',
+    esParquet: !!M.esParquet,
+    completo: M.completo || [],
+    tabla: M.tabla.volcado(),
+    // El archivo original NO se guarda: son los mismos cientos de megas otra
+    // vez, y para abrir el tablero no hace falta.
+    fuentes: M.sources.map(s => ({
+      name: s.name, sheet: s.sheet, shape: s.shape, cols: s.cols, headers: s.headers,
+      truncado: s.truncado, filas: s.filas, equipos: s.equipos, idx: s.idx, devs: s.devs
+    }))
+  };
+}
+
+/** Guarda lo cargado. Si el navegador no deja, se dice y se sigue. */
+async function guardarModelo() {
+  if (!M.sources.length || !M.tabla || !M.tabla.length) return null;
+  const p = paqueteModelo();
+  const ficha = {
+    archivo: p.archivo, guardado: p.guardado, filas: p.tabla.n,
+    equipos: M.devInfo ? M.devInfo.size : 0,
+    fuentes: p.fuentes.map(f => f.name), bytes: M.tabla.bytes()
+  };
+  await operaBD('readwrite', st => { st.put(p, BD_MODELO); return st.put(ficha, BD_FICHA); });
+  GUARDADO = ficha;
+  return ficha;
+}
+
+/** Vuelve a montar lo guardado. Devuelve la ficha, o null si no hay nada. */
+async function restaurarModelo() {
+  const p = await operaBD('readonly', st => st.get(BD_MODELO));
+  if (!p || !p.tabla || !p.fuentes || !p.fuentes.length) return null;
+  // Una copia de un formato anterior no se intenta montar: se tira y se pide el
+  // archivo, que es mucho mejor que enseñar numeros a medias.
+  if (p.v !== 1) { await olvidarModelo(); return null; }
+  M.tabla = Tabla(p.tabla);
+  M.sources = p.fuentes.map(s => Object.assign({}, s, { rows: Filas(M.tabla, s.idx) }));
+  M.completo = p.completo || [];
+  M.esParquet = !!p.esParquet;
+  M.archivo = null;                    // el archivo no se guardo; se dice cual era
+  M.archivoNombre = p.archivo || '';
+  mergeSources();
+  M.aggFull = aggregate(M.rows);
+  M.effVer = effVersions(M.rows);
+  GUARDADO = { archivo: p.archivo, guardado: p.guardado, filas: p.tabla.n,
+               equipos: M.devInfo.size, fuentes: p.fuentes.map(f => f.name),
+               bytes: M.tabla.bytes() };
+  return GUARDADO;
+}
+
+/** Que hay guardado, sin montarlo: esto lee unos cientos de bytes. */
+async function infoGuardado() {
+  try { return (await operaBD('readonly', st => st.get(BD_FICHA))) || null; }
+  catch (e) { return null; }
+}
+
+/** Borra la copia. Lo que se cargo deja de estar en este equipo. */
+async function olvidarModelo() {
+  try {
+    await operaBD('readwrite', st => { st.delete(BD_MODELO); return st.delete(BD_FICHA); });
+    GUARDADO = null;
+    return true;
+  } catch (e) { return false; }
+}
+
+/**
+ * Guarda sin hacer esperar a nadie ni romper nada si falla.
+ *
+ * Que no quepa en el disco, o que el navegador este en modo privado, no puede
+ * tumbar una importacion que ya salio bien: se avisa y se sigue con los datos
+ * en memoria, como se ha hecho siempre.
+ */
+function guardarModeloEnDiferido() {
+  setTimeout(async () => {
+    try {
+      const f = await guardarModelo();
+      if (f) toast('Guardado en este equipo: la próxima vez abre directo. ' +
+                   'Se borra desde Origen de datos.');
+    } catch (e) {
+      console.warn('no se pudo guardar: ' + (e && e.message));
+      toast('No se pudo guardar en el navegador (' + ((e && e.message) || 'sin espacio') +
+            '). Los datos siguen cargados, pero habrá que volver a traer el archivo.');
+    }
+  }, 60);
+}
 
 /* ============================================================================
    18b. LECTURA EN STREAMING  ·  archivos que no caben en memoria
@@ -1964,6 +2156,7 @@ async function importarGrande(file, opts, onProg) {
   // El File es un puntero al archivo en disco, no una copia: guardarlo no cuesta
   // memoria y permite volver a recorrerlo despues para una aplicacion concreta.
   M.archivo = file;
+  M.esParquet = false;      // con que lector se leyo, para poder repetirlo
   M.completo = completos.slice();
 
   const { sep, headers } = await cabeceraDe(file);
@@ -2046,7 +2239,7 @@ async function importarGrande(file, opts, onProg) {
     porApp.set(ka, (porApp.get(ka) || 0) + n);
   });
 
-  const MAX = opts.maxExcep || 500000;
+  const MAX = opts.maxExcep || TOPE_DETALLE;
   const orden = Array.from(porApp.entries()).sort((a, b) => b[1] - a[1]);
   const dentro = new Set();
   let acumulado = 0;
@@ -2101,6 +2294,22 @@ async function importarGrande(file, opts, onProg) {
    --------------------------------------------------------------------------- */
 
 /** Los primeros y ultimos cuatro bytes de un Parquet son «PAR1». */
+/**
+ * Cuantas filas de detalle -las que llevan nombre de equipo- caben.
+ *
+ * El resto de aplicaciones se cuentan igual en el catalogo, pero sin nombres:
+ * se ve cuantos equipos la tienen, no cuales. El boton «Traer los equipos de
+ * esta aplicacion» recorre el archivo otra vez para una en concreto.
+ *
+ * El numero era 500.000 porque cada fila costaba 638 bytes como objeto y eso ya
+ * eran 320 MB. Guardadas por columnas cuestan 105, asi que lo que manda ahora
+ * no es la memoria sino el tiempo de dibujar: medido, agregar y calcular
+ * cumplimiento salen a 2,5 microsegundos por fila, o sea unos 2,5 s para un
+ * millon. Se paga una vez al cargar -despues queda en cache- y a cambio casi
+ * ninguna aplicacion se queda sin nombres.
+ */
+const TOPE_DETALLE = 1000000;
+
 function esParquet(buf) {
   const u = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
   return u.length === 4 && u[0] === 0x50 && u[1] === 0x41 && u[2] === 0x52 && u[3] === 0x31;
@@ -2128,6 +2337,7 @@ async function importarParquet(file, opts, onProg) {
   const aviso = (frac, filas, fase) => onProg && onProg(frac, filas, fase);
 
   M.archivo = file;
+  M.esParquet = true;       // con que lector se leyo, para poder repetirlo
   M.completo = completos.slice();
 
   const origen = bufferDe(file);
@@ -2237,7 +2447,7 @@ async function importarParquet(file, opts, onProg) {
     const ka = p[0] + SEP1 + p[1];
     porApp.set(ka, (porApp.get(ka) || 0) + n);
   });
-  const MAX = opts.maxExcep || 500000;
+  const MAX = opts.maxExcep || TOPE_DETALLE;
   const orden = Array.from(porApp.entries()).sort((a, b) => b[1] - a[1]);
   const dentro = new Set();
   let acumulado = 0;
@@ -3861,6 +4071,11 @@ function vacioSinNombres(key) {
   if (M.archivo) return cabeza +
     `<br><button class="btn btn-p" data-traeapp="${esc(key)}" style="margin-top:12px">` +
     `Traer los equipos de esta aplicación</button>`;
+  // Con los datos recuperados de la copia guardada el archivo ya no esta a
+  // mano, asi que se dice cual era en vez de mandar a un script.
+  if (M.archivoNombre) return cabeza +
+    '<br><span style="font-size:12px">Los datos vienen de la copia guardada en este equipo. ' +
+    `Para traer los equipos de esta aplicación, vuelve a arrastrar <b>${esc(M.archivoNombre)}</b>.</span>`;
   return cabeza + '<br><span style="font-size:12px">Para tenerlos:</span><br>' +
     `<code>.\\resumir-detalle.ps1 -Ruta '...' -Completo '${esc(app)}'</code>`;
 }
@@ -6339,10 +6554,23 @@ function vDatos(A, rows) {
     : `<div class="mt-wrap"><div class="empty" style="padding:26px">Todavía no has cargado ningún archivo</div>
        <div class="dt-foot"><button class="btn btn-p" data-load="add" style="margin-left:auto">Añadir archivo</button></div></div>`;
 
+  // Guardar el parque en el equipo sin decirlo no seria honesto: se ve aqui,
+  // con la fecha y lo que ocupa, y se borra de un clic.
+  const copia = GUARDADO ? `<div class="banner" style="margin:12px 0 0">${ico('shield')}<div>
+      <b>Hay una copia guardada en este equipo</b>, así que el tablero abre con los datos
+      puestos sin volver a traer el archivo.
+      ${esc(GUARDADO.archivo || '')} · ${fmt(GUARDADO.filas)} filas ·
+      ${GUARDADO.bytes ? (GUARDADO.bytes / 1048576).toFixed(1) + ' MB' : ''} ·
+      guardada el ${GUARDADO.guardado ? new Date(GUARDADO.guardado).toLocaleString('es-CO') : '—'}.
+      <span class="mini" style="display:block;margin-top:4px">Vive en el almacen del navegador de esta
+      máquina: no viaja a ningún servidor y no forma parte de la página publicada.</span>
+      <button class="btn" data-olvidar="1" style="margin-top:10px">Olvidar los datos guardados</button>
+    </div></div>` : '';
+
   return viewHead('Origen de datos',
     'De dónde salen los números: los archivos cargados, las consultas que los producen y la conexión directa con Defender.') +
     sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo. Puedes quitar el que hayas cargado por error') +
-    fuentes +
+    fuentes + copia +
     '<div id="anclaConsultas"></div>' +
     sec('Identificadores de la aplicación', 'Los mismos para los dos scripts y para la conexión en página. Ninguno es secreto') +
     `<div class="adm-grid">
@@ -6846,16 +7074,28 @@ document.addEventListener('click', async e => {
     // Recorrer el archivo otra vez sale barato; mantener a mano la particion
     // cuadrada entre catalogo y detalle, no.
     const lista = (M.completo || []).concat([app]);
-    await importarPorTrozos(M.archivo, (M.archivo.size || 0) / 1048576, { completo: lista });
+    // Con el MISMO lector: un Parquet releido como texto revienta con su
+    // propia firma «PAR1», que es justo lo que pasaba aqui.
+    await importarPorTrozos(M.archivo, (M.archivo.size || 0) / 1048576, { completo: lista }, M.esParquet);
     location.hash = '#app=' + encodeURIComponent(clave);
     readHash(); render();
     return;
   }
+  if (cl('[data-olvidar]')) {
+    if (!confirm('¿Borrar los datos guardados en este equipo?\n\n' +
+                 'Lo que hay cargado ahora se queda, pero al volver a abrir la página ' +
+                 'habrá que traer el archivo otra vez.')) return;
+    await olvidarModelo();
+    toast('Borrado. La página ya no guarda nada de este inventario.');
+    render(); return;
+  }
   if ((el = cl('[data-rmsrc]'))) {
     const v = el.getAttribute('data-rmsrc');
     if (v === 'todas') {
-      if (!confirm('¿Quitar todos los archivos y volver a la pantalla inicial?')) return;
-      resetModel(); mergeSources();
+      if (!confirm('¿Quitar todos los archivos y volver a la pantalla inicial?\n\n' +
+                   'Se borra también la copia guardada en este equipo.')) return;
+      olvidarModelo();
+      resetModel(); resetOrigen(); mergeSources();
       $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
       $('#fileInput').value = ''; return;
     }
@@ -7158,6 +7398,7 @@ async function importarPorTrozos(file, mb, opts, parquet) {
     readHash(); render(); window.scrollTo({ top: 0 });
     toast(`${fmt(r.filas)} filas recorridas · ${fmt(r.equipos)} equipos · ` +
           `${fmt(r.atrasados)} instalaciones atrasadas con nombre`);
+    guardarModeloEnDiferido();
     if (r.fuera) {
       // Nada se recorta en silencio: se dice cuanto y de que.
       toast(`${fmt(r.fuera)} aplicaciones sin nombres de equipo (${fmt(r.fueraFilas)} filas, ` +
@@ -7228,6 +7469,7 @@ async function loadFile(file, añadir) {
     readHash();
     render();
     window.scrollTo({ top: 0 });
+    guardarModeloEnDiferido();
   } catch (err) { console.error(err); fail(err && err.message ? err.message : String(err)); }
 }
 $('#btnPick').addEventListener('click', () => $('#fileInput').click());
@@ -7280,10 +7522,29 @@ $('#btnConectar').addEventListener('click', () => irADatos('anclaConexion'));
 cfgLoad(); histLoad();
 M.aggFull = aggregate(M.rows);
 (async () => {
+  // Lo que se cargo la ultima vez sigue en este equipo: se abre con los datos
+  // puestos, sin volver a recorrer el archivo. Si no hay nada, o el navegador
+  // no deja guardar, se sigue como siempre: la pantalla de arrastrar.
+  let recuperado = null;
+  try { recuperado = await restaurarModelo(); }
+  catch (e) { console.warn('no se pudo recuperar lo guardado: ' + (e && e.message)); }
+  if (recuperado) {
+    $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
+    document.title = (CFG.org ? CFG.org + ' · ' : '') + 'Inventario de Aplicaciones';
+    readHash(); render(); window.scrollTo({ top: 0 });
+    // Con la FECHA: abrir el tablero y ver datos de hace un mes creyendolos de
+    // hoy seria peor que tener que arrastrar el archivo.
+    const cuando = recuperado.guardado ? new Date(recuperado.guardado) : null;
+    toast(`${fmt(M.rows.length)} filas guardadas en este equipo` +
+          (recuperado.archivo ? ` · ${truncate(recuperado.archivo, 22)}` : '') +
+          (cuando ? ` · cargadas el ${cuando.toLocaleDateString('es-CO')}` : '') +
+          '. Arrastra un archivo nuevo para actualizarlas.');
+  }
+
   const err = await completarLogin();
-  readHash();
+  if (!recuperado) readHash();
   if (err) { fail(err); return; }
-  if (conectado()) { abrirVacio(S.view === 'resumen' ? 'datos' : S.view); toast('Conectado a Defender'); }
+  if (conectado() && !recuperado) { abrirVacio(S.view === 'resumen' ? 'datos' : S.view); toast('Conectado a Defender'); }
 })();
 </script>
 </body>

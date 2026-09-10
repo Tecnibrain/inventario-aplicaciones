@@ -1776,10 +1776,23 @@ function vDatos(A, rows) {
     : `<div class="mt-wrap"><div class="empty" style="padding:26px">Todavía no has cargado ningún archivo</div>
        <div class="dt-foot"><button class="btn btn-p" data-load="add" style="margin-left:auto">Añadir archivo</button></div></div>`;
 
+  // Guardar el parque en el equipo sin decirlo no seria honesto: se ve aqui,
+  // con la fecha y lo que ocupa, y se borra de un clic.
+  const copia = GUARDADO ? `<div class="banner" style="margin:12px 0 0">${ico('shield')}<div>
+      <b>Hay una copia guardada en este equipo</b>, así que el tablero abre con los datos
+      puestos sin volver a traer el archivo.
+      ${esc(GUARDADO.archivo || '')} · ${fmt(GUARDADO.filas)} filas ·
+      ${GUARDADO.bytes ? (GUARDADO.bytes / 1048576).toFixed(1) + ' MB' : ''} ·
+      guardada el ${GUARDADO.guardado ? new Date(GUARDADO.guardado).toLocaleString('es-CO') : '—'}.
+      <span class="mini" style="display:block;margin-top:4px">Vive en el almacen del navegador de esta
+      máquina: no viaja a ningún servidor y no forma parte de la página publicada.</span>
+      <button class="btn" data-olvidar="1" style="margin-top:10px">Olvidar los datos guardados</button>
+    </div></div>` : '';
+
   return viewHead('Origen de datos',
     'De dónde salen los números: los archivos cargados, las consultas que los producen y la conexión directa con Defender.') +
     sec('Fuentes cargadas', 'Se funden entre sí: parque, catálogo y excepciones forman un solo modelo. Puedes quitar el que hayas cargado por error') +
-    fuentes +
+    fuentes + copia +
     '<div id="anclaConsultas"></div>' +
     sec('Identificadores de la aplicación', 'Los mismos para los dos scripts y para la conexión en página. Ninguno es secreto') +
     `<div class="adm-grid">

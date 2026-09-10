@@ -373,16 +373,28 @@ document.addEventListener('click', async e => {
     // Recorrer el archivo otra vez sale barato; mantener a mano la particion
     // cuadrada entre catalogo y detalle, no.
     const lista = (M.completo || []).concat([app]);
-    await importarPorTrozos(M.archivo, (M.archivo.size || 0) / 1048576, { completo: lista });
+    // Con el MISMO lector: un Parquet releido como texto revienta con su
+    // propia firma «PAR1», que es justo lo que pasaba aqui.
+    await importarPorTrozos(M.archivo, (M.archivo.size || 0) / 1048576, { completo: lista }, M.esParquet);
     location.hash = '#app=' + encodeURIComponent(clave);
     readHash(); render();
     return;
   }
+  if (cl('[data-olvidar]')) {
+    if (!confirm('¿Borrar los datos guardados en este equipo?\n\n' +
+                 'Lo que hay cargado ahora se queda, pero al volver a abrir la página ' +
+                 'habrá que traer el archivo otra vez.')) return;
+    await olvidarModelo();
+    toast('Borrado. La página ya no guarda nada de este inventario.');
+    render(); return;
+  }
   if ((el = cl('[data-rmsrc]'))) {
     const v = el.getAttribute('data-rmsrc');
     if (v === 'todas') {
-      if (!confirm('¿Quitar todos los archivos y volver a la pantalla inicial?')) return;
-      resetModel(); mergeSources();
+      if (!confirm('¿Quitar todos los archivos y volver a la pantalla inicial?\n\n' +
+                   'Se borra también la copia guardada en este equipo.')) return;
+      olvidarModelo();
+      resetModel(); resetOrigen(); mergeSources();
       $('#app').hidden = true; $('#topActions').hidden = true; $('#dropScreen').hidden = false;
       $('#fileInput').value = ''; return;
     }
@@ -685,6 +697,7 @@ async function importarPorTrozos(file, mb, opts, parquet) {
     readHash(); render(); window.scrollTo({ top: 0 });
     toast(`${fmt(r.filas)} filas recorridas · ${fmt(r.equipos)} equipos · ` +
           `${fmt(r.atrasados)} instalaciones atrasadas con nombre`);
+    guardarModeloEnDiferido();
     if (r.fuera) {
       // Nada se recorta en silencio: se dice cuanto y de que.
       toast(`${fmt(r.fuera)} aplicaciones sin nombres de equipo (${fmt(r.fueraFilas)} filas, ` +
@@ -755,6 +768,7 @@ async function loadFile(file, añadir) {
     readHash();
     render();
     window.scrollTo({ top: 0 });
+    guardarModeloEnDiferido();
   } catch (err) { console.error(err); fail(err && err.message ? err.message : String(err)); }
 }
 $('#btnPick').addEventListener('click', () => $('#fileInput').click());
@@ -807,10 +821,29 @@ $('#btnConectar').addEventListener('click', () => irADatos('anclaConexion'));
 cfgLoad(); histLoad();
 M.aggFull = aggregate(M.rows);
 (async () => {
+  // Lo que se cargo la ultima vez sigue en este equipo: se abre con los datos
+  // puestos, sin volver a recorrer el archivo. Si no hay nada, o el navegador
+  // no deja guardar, se sigue como siempre: la pantalla de arrastrar.
+  let recuperado = null;
+  try { recuperado = await restaurarModelo(); }
+  catch (e) { console.warn('no se pudo recuperar lo guardado: ' + (e && e.message)); }
+  if (recuperado) {
+    $('#dropScreen').hidden = true; $('#app').hidden = false; $('#topActions').hidden = false;
+    document.title = (CFG.org ? CFG.org + ' · ' : '') + 'Inventario de Aplicaciones';
+    readHash(); render(); window.scrollTo({ top: 0 });
+    // Con la FECHA: abrir el tablero y ver datos de hace un mes creyendolos de
+    // hoy seria peor que tener que arrastrar el archivo.
+    const cuando = recuperado.guardado ? new Date(recuperado.guardado) : null;
+    toast(`${fmt(M.rows.length)} filas guardadas en este equipo` +
+          (recuperado.archivo ? ` · ${truncate(recuperado.archivo, 22)}` : '') +
+          (cuando ? ` · cargadas el ${cuando.toLocaleDateString('es-CO')}` : '') +
+          '. Arrastra un archivo nuevo para actualizarlas.');
+  }
+
   const err = await completarLogin();
-  readHash();
+  if (!recuperado) readHash();
   if (err) { fail(err); return; }
-  if (conectado()) { abrirVacio(S.view === 'resumen' ? 'datos' : S.view); toast('Conectado a Defender'); }
+  if (conectado() && !recuperado) { abrirVacio(S.view === 'resumen' ? 'datos' : S.view); toast('Conectado a Defender'); }
 })();
 </script>
 </body>
