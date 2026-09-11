@@ -4302,7 +4302,22 @@ function vAplicaciones(A, rows) {
       inst:n, vers: vm.size, rec: r.rec || '—', pctOk: o.pctOk, bad: o.bad, estado: o.estado,
       gest: r.gest ? 'Sí' : 'No', crit: r.crit ? 1 : 0, _o:o };
   });
-  return viewHead('Aplicaciones', 'Catálogo detectado en el parque. Pulsa una aplicación para ver su distribución de versiones y los equipos afectados.') +
+  // Cuantas puntuan de verdad. Con el alcance por defecto son las administradas
+  // y las criticas, que en un parque real son un puñado: el resto de la tabla
+  // sale con un guion y nada explicaba por que.
+  const puntuan = data.filter(x => x.estado !== 'na').length;
+  const aviso = puntuan < data.length ? `<div class="banner" style="margin:14px 0 0">${ico('info')}<div>
+      <b>${fmt(puntuan)} de ${fmt(data.length)} aplicaciones puntúan en el cumplimiento.</b>
+      El resto sale con «—» en <i>% al día</i>, que no es cero: es <b>no puntúa</b>.
+      ${CFG.params.alcance === 'todas'
+        ? 'Están fuera porque todavía no tienen versión aprobada.'
+        : 'El alcance del estándar son las aplicaciones <b>administradas</b>, las <b>críticas</b> y las ' +
+          '<b>no permitidas</b>: un equipo lleva decenas de librerías y controladores, y exigir que todos ' +
+          'estén en la última versión convierte el indicador en ruido. ' +
+          'Para puntuarlas todas, cambia el alcance a «todo el catálogo» en Administración.'}
+    </div></div>` : '';
+
+  return viewHead('Aplicaciones', 'Catálogo detectado en el parque. Pulsa una aplicación para ver su distribución de versiones y los equipos afectados.') + aviso +
     `<div class="grid kpis" style="margin:14px 0 4px">
       ${kpi({ ic:'grid', label:'Aplicaciones', value: fmt(A.nApp), sub:`De <b>${fmt(A.nVendor)}</b> fabricantes` })}
       ${kpi({ ic:'shield', label:'Administradas', value: fmt(data.filter(d => d.gest === 'Sí').length),
@@ -4321,7 +4336,9 @@ function vAplicaciones(A, rows) {
       cell:(r,c) => {
         if (c.k === 'name') return (r.crit ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : '') + esc(r.name);
         if (c.k === 'rec') return `<span class="mono mini">${esc(r.rec)}</span>`;
-        if (c.k === 'pctOk') return r.estado === 'na' ? '<span class="muted">—</span>' :
+        if (c.k === 'pctOk') return r.estado === 'na'
+          ? `<span class="muted" title="${esc(SCOPE_LAB[scopeNote(r.key)] || 'No puntúa')}: no entra en el cálculo de cumplimiento">—</span>`
+          :
           `<span style="color:${r.pctOk>=95?'var(--ok-ink)':r.pctOk>=60?'var(--warn-ink)':'var(--crit-ink)'}">${fmt1(r.pctOk)} %</span>`;
         if (c.k === 'gest') return r.gest === 'Sí' ? '<span class="pill y">Sí</span>' : '<span class="pill n">No</span>';
         if (c.k === 'estado') return semaforo(r.estado);
