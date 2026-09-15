@@ -156,11 +156,15 @@ async function importarGrande(file, opts, onProg) {
   /* Y la clave completa, por el mismo motivo: limpiar el fabricante y agrupar el
      nombre son media docena de expresiones regulares, y esto se llama una vez
      por INSTALACION -cuatro millones y medio-. Pares distintos hay unos miles. */
+  // Anidada y no con una clave compuesta: juntar las dos cadenas y buscar por
+  // ella obliga a recorrer y dispersar una cadena larga en cada una de los
+  // cuatro millones y medio de vueltas. Medido, 1.405 ms contra 189.
   const cacheClave = new Map();
   const claveDe = (v, a) => {
-    const k = v + SEP1 + a;
-    let x = cacheClave.get(k);
-    if (x === undefined) cacheClave.set(k, x = claveApp(v, a));
+    let m = cacheClave.get(v);
+    if (m === undefined) cacheClave.set(v, m = new Map());
+    let x = m.get(a);
+    if (x === undefined) m.set(a, x = claveApp(v, a));
     return x;
   };
 
@@ -372,11 +376,15 @@ async function importarParquet(file, opts, onProg) {
   /* Y la clave completa, por el mismo motivo: limpiar el fabricante y agrupar el
      nombre son media docena de expresiones regulares, y esto se llama una vez
      por INSTALACION -cuatro millones y medio-. Pares distintos hay unos miles. */
+  // Anidada y no con una clave compuesta: juntar las dos cadenas y buscar por
+  // ella obliga a recorrer y dispersar una cadena larga en cada una de los
+  // cuatro millones y medio de vueltas. Medido, 1.405 ms contra 189.
   const cacheClave = new Map();
   const claveDe = (v, a) => {
-    const k = v + SEP1 + a;
-    let x = cacheClave.get(k);
-    if (x === undefined) cacheClave.set(k, x = claveApp(v, a));
+    let m = cacheClave.get(v);
+    if (m === undefined) cacheClave.set(v, m = new Map());
+    let x = m.get(a);
+    if (x === undefined) m.set(a, x = claveApp(v, a));
     return x;
   };
 

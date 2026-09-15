@@ -425,14 +425,56 @@ const GEO = {"fiji":[177.98,-17.83],"fiyi":[177.98,-17.83],"fj":[177.98,-17.83],
 const RE_VER_EN_NOMBRE = /[_\s-]*v?\d+(?:\.\d+){1,3}[_\s-]*/g;
 function baseApp(nombre) {
   const s = String(nombre == null ? '' : nombre);
-  const limpio = s.replace(RE_VER_EN_NOMBRE, '_').replace(/_+/g, '_')
-                  .replace(/\s+/g, ' ').replace(/^[_\s-]+|[_\s-]+$/g, '');
+  const limpio = s.replace(RE_VER_EN_NOMBRE, '_')
+                  // Si la version iba entre parentesis, al quitarla quedaba el
+                  // hueco: «Lexmark Universal v2 XL (_) Print Driver». Y eso ya
+                  // no casa con el mismo nombre sin version.
+                  .replace(/[([{]\s*_\s*[)\]}]/g, ' ')
+                  .replace(/_+/g, '_')
+                  .replace(/\s+/g, ' ').replace(/^[_\s-]+|[_\s-]+$/g, '')
+                  .replace(/\s+([)\]}])/g, '$1').replace(/([([{])\s+/g, '$1')
+                  .trim();
   return limpio || s;
 }
 
 /* ============================================================================
    3. DETECCION DE COLUMNAS  ·  ingles + espanol
    ========================================================================== */
+/**
+ * La forma de un nombre para COMPARARLO, no para ensenarlo.
+ *
+ * Sin mayusculas, sin acentos y sin nada que no sea letra o numero. Es lo que
+ * hace que «Microsoft.VisualStudioCode» y «Microsoft Visual Studio Code» sean
+ * la misma cosa, o «NOTEPAD++» y «Notepad++». Y lo que mantiene separados
+ * «...LanguageExperiencePackes-ES» y «...es-MX», que se diferencian en algo
+ * mas que en como esta escrito.
+ */
+// Se cachea: cuesta una normalizacion Unicode y dos expresiones regulares, y se
+// llama una vez por instalacion sobre unos pocos miles de nombres distintos.
+const _cForma = new Map();
+function formaDe(s) {
+  const k = s == null ? '' : String(s);
+  let x = _cForma.get(k);
+  if (x === undefined) {
+    _cForma.set(k, x = k.toLowerCase().normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ''));
+  }
+  return x;
+}
+
+/* Las formas juridicas con las que una misma empresa aparece escrita de cuatro
+   maneras. Solo formas juridicas: quitar tambien «Systems» o «Software» juntaria
+   empresas que de verdad son distintas. */
+const SUF_EMPRESA = /[,\s]+(?:inc|llc|l\.l\.c|ltd|ltda|limited|limitada|corp|corporation|company|compania|co|cia|c\.i\.a|gmbh|s\.a|s\.a\.s|sas|s\.l|b\.v|n\.v|ab|oy|a\/s|pty|plc|srl|s\.r\.l|k\.k|pte)\.?$/i;
+function sinFormaJuridica(s) {
+  for (let i = 0; i < 3; i++) {
+    const t = s.replace(SUF_EMPRESA, '').trim().replace(/[,;]+$/, '').trim();
+    if (t === s || !t) break;
+    s = t;
+  }
+  return s;
+}
+
 /* Como se nombra una aplicacion, en un solo sitio.
    El importador y el modelo TIENEN que coincidir: cuando no coincidian, el
    importador veia «X - 1.2» y «X - 1.3» como dos aplicaciones distintas con una
@@ -449,8 +491,12 @@ function baseApp(nombre) {
  * CN resulta ser un identificador y no un nombre, sirve mejor la organizacion.
  */
 function normVendor(v) {
-  let s = String(v == null ? '' : v).trim();
+  // Los espacios que no se ven: el inventario trae «Cisco<U+00A0>Webex» con
+  // espacio duro, que en pantalla es identico a «Cisco Webex» y como clave es
+  // otra cosa. Se pasan todos a espacio normal antes de nada.
+  let s = String(v == null ? '' : v).replace(/[\s\u00a0\u200b-\u200d\ufeff]+/g, ' ').trim();
   if (!s) return '(sin fabricante)';
+  s = s.replace(/^["'«“]+|["'»”]+$/g, '').trim();   // «"NOTEPAD++"»
   if (/(?:^|,)\s*(?:CN|O)\s*=/i.test(s)) {
     const cn = s.match(/(?:^|,)\s*CN\s*=\s*([^,]+)/i);
     const or = s.match(/(?:^|,)\s*O\s*=\s*([^,]+)/i);
@@ -458,7 +504,26 @@ function normVendor(v) {
     const org = or ? or[1].trim() : '';
     s = (/^[0-9a-f-]{16,}$/i.test(nombre) && org) ? org : (nombre || org || s);
   }
-  return VEN_UNK.test(s) ? '(sin fabricante)' : s;
+  // Una ruta o un identificador no son un fabricante: no dicen de quien es el
+  // programa, y ademas parten en dos lo que es una sola aplicacion.
+  if (/[\\/]/.test(s)) return '(sin fabricante)';
+  if (/^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i.test(s)) return '(sin fabricante)';
+  s = sinFormaJuridica(s);
+  return !s || VEN_UNK.test(s) ? '(sin fabricante)' : s;
+}
+
+/**
+ * El fabricante sabiendo de que aplicacion hablamos.
+ *
+ * Cuando lo unico que dice es el nombre del propio producto -«Webex / Webex»,
+ * «Copilot / Copilot»- no aporta identidad, y en cambio separa esas filas de
+ * las que si traen el fabricante de verdad. Se deja vacio y el relleno por
+ * mayoria le pone el que corresponde.
+ */
+function vendorDe(vendor, app, yaNormalizada) {
+  const v = normVendorCache(vendor);
+  const f = formaDe(v);
+  return f && f === formaDe(yaNormalizada ? app : normApp(app)) ? '(sin fabricante)' : v;
 }
 
 /* Las compilaciones de Windows y el nombre con el que se publican. */
@@ -493,8 +558,25 @@ function soRelease(osver) {
   return WIN_REL[b] || (b >= 22000 ? 'Windows 11 (compilaci\u00f3n ' + b + ')'
                                    : 'Windows 10 (compilaci\u00f3n ' + b + ')');
 }
-const normApp = a => (CFG.params.agrupaVersion === false ? a : baseApp(a)) || a || '(sin nombre)';
-const claveApp = (v, a) => normVendor(v) + ' / ' + normApp(a);
+/* Normalizar cuesta media docena de expresiones regulares y se llama una vez
+   por INSTALACION: cuatro millones y medio en un parque grande, sobre unos pocos
+   miles de nombres distintos. Se cachea por valor. El diccionario se tira si
+   cambia el ajuste de agrupar, que es de lo unico que depende. */
+const _cApp = new Map(); let _cAppModo = null;
+function normApp(a) {
+  const modo = CFG.params.agrupaVersion !== false;
+  if (modo !== _cAppModo) { _cApp.clear(); _cAppModo = modo; }
+  let x = _cApp.get(a);
+  if (x === undefined) _cApp.set(a, x = ((modo ? baseApp(a) : a) || a || '(sin nombre)'));
+  return x;
+}
+const _cVen = new Map();
+function normVendorCache(v) {
+  let x = _cVen.get(v);
+  if (x === undefined) _cVen.set(v, x = normVendor(v));
+  return x;
+}
+const claveApp = (v, a) => { const an = normApp(a); return vendorDe(v, an, true) + ' / ' + an; };
 
 const ROLES = [
   ['count',  ['equipos','dispositivos','devicecount','devicecounts','numerodispositivos',

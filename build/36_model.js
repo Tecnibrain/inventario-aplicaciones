@@ -191,7 +191,7 @@ function addSource(grid, fileName, sheet, reset) {
     const o = {
       device, w,
       user:    device ? '' : '',
-      vendor:  normVendor(vendor),
+      vendor:  vendorDe(vendor, appGrp, true),
       app:     appGrp,
       appRaw:  appRaw || '(sin nombre)',
       ver:     verUsable || '(sin versión)',
@@ -254,6 +254,109 @@ function detectaSolape() {
  * Se elige el fabricante con mas peso, no el primero que aparezca: si dos
  * fuentes discrepan, manda la que cubre mas equipos.
  */
+/**
+ * Una sola grafia por aplicacion, y gana la que mas equipos tiene.
+ *
+ * El inventario trae el mismo producto escrito de varias formas: el nombre del
+ * paquete y el nombre amigable -«Microsoft.VisualStudioCode» contra «Microsoft
+ * Visual Studio Code»-, mayusculas distintas, un espacio de mas. Como claves de
+ * texto son cosas distintas, asi que el catalogo mostraba dos filas de lo mismo
+ * y los equipos salian repartidos entre las dos.
+ *
+ * Se comparan por su forma -sin mayusculas ni puntuacion- y se reescriben todas
+ * a la grafia que mas pesa. Se decide una vez por nombre DISTINTO, que son unos
+ * miles, no una vez por fila.
+ *
+ * Los nombres tal y como venian se conservan aparte, en `appRaws`, para poder
+ * enseñar que se ha agrupado y con que.
+ */
+function unificaNombres() {
+  const T = M.tabla;
+  const cApp = T.crudo('app'), aApp = cApp.a, vApp = cApp.vals;
+  const cVen = T.crudo('vendor'), aVen = cVen.a, vVen = cVen.vals;
+  const cKey = T.crudo('appKey'), aKey = cKey.a;
+  if (!aApp || !aKey) return 0;
+
+  // Cuanto pesa cada grafia. Por valor distinto del diccionario, que son unos
+  // miles, y no por fila.
+  const pesos = T.pesos;
+  const pApp = new Float64Array(vApp.length);
+  const pVen = aVen ? new Float64Array(vVen.length) : null;
+  M.rows.cada(i => {
+    const w = pesos[i];
+    pApp[aApp[i]] += w;
+    if (pVen) pVen[aVen[i]] += w;
+  });
+
+  /* La que mas pesa manda dentro de su grupo, y el grupo es «como se escribe
+     sin mayusculas ni puntuacion». Decidirlo por mayoria es lo unico que
+     escala: enumerar la basura -comillas, espacios duros, formas juridicas,
+     dominios- no se acaba nunca. */
+  const canoniza = (vals, peso) => {
+    const manda = new Map();
+    for (let k = 1; k < vals.length; k++) {
+      const f = formaDe(vals[k]);
+      if (!f) continue;
+      const p = manda.get(f);
+      if (p === undefined || peso[k] > peso[p]) manda.set(f, k);
+    }
+    const mapa = new Int32Array(vals.length);
+    let n = 0;
+    for (let k = 0; k < vals.length; k++) {
+      const f = formaDe(vals[k]);
+      const m = f ? manda.get(f) : undefined;
+      mapa[k] = (m === undefined ? k : m);
+      if (mapa[k] !== k) n++;
+    }
+    return { mapa, n };
+  };
+
+  const uApp = canoniza(vApp, pApp);
+  const uVen = pVen ? canoniza(vVen, pVen) : null;
+
+  /* La grafia que gana se guarda ya limpia. Si el valor mas pesado venia con
+     comillas alrededor -el inventario trae unos cuantos asi-, lo que se ensena
+     es el nombre sin ellas, no el que gano por mayoria. */
+  if (uVen) {
+    const yaVisto = new Map();
+    // El limite se fija ANTES: crear el nombre limpio alarga el diccionario, y
+    // releer la longitud en cada vuelta seria perseguir la propia cola.
+    const nVen = vVen.length;
+    for (let k = 1; k < nVen; k++) {
+      const g = uVen.mapa[k];
+      let limpio = yaVisto.get(g);
+      if (limpio === undefined) {
+        const s = vVen[g], n = normVendor(s);
+        yaVisto.set(g, limpio = (n === s ? g : T.idPara('vendor', n)));
+      }
+      uVen.mapa[k] = limpio;
+    }
+  }
+  const cambian = uApp.n + (uVen ? uVen.n : 0);
+  if (!cambian) return 0;
+
+  /* Y la clave se rehace desde las dos columnas ya unificadas. Se resuelve por
+     PAR distinto -unos miles- y no por fila: dentro del bucle solo se copian
+     enteros y se mira un mapa anidado. */
+  const porVen = new Map();
+  const n = T.length;
+  for (let i = 0; i < n; i++) {
+    const a = uApp.mapa[aApp[i]];
+    aApp[i] = a;
+    const v = aVen ? (uVen ? uVen.mapa[aVen[i]] : aVen[i]) : 0;
+    if (aVen) aVen[i] = v;
+    let m = porVen.get(v);
+    if (m === undefined) porVen.set(v, m = new Map());
+    let kid = m.get(a);
+    if (kid === undefined) {
+      const ven = aVen ? (vVen[v] || '(sin fabricante)') : '(sin fabricante)';
+      m.set(a, kid = T.idPara('appKey', ven + ' / ' + (vApp[a] || '(sin nombre)')));
+    }
+    aKey[i] = kid;
+  }
+  return cambian;
+}
+
 function rellenaFabricante() {
   const conocido = new Map();               // nombre -> Map(fabricante -> peso)
   const T = M.tabla;
@@ -306,6 +409,10 @@ function mergeSources() {
     if (!M.headers.length || s.shape === 'detalle') { M.headers = s.headers; M.cols = s.cols; }
   }
   M.fileName = M.sources.map(s => s.name).join(' + ');
+  // Primero una grafia por aplicacion, y despues el fabricante: el relleno por
+  // mayoria agrupa POR NOMBRE, asi que con dos grafias sueltas repartiria el
+  // peso entre las dos y podria elegir mal.
+  M.unificados = unificaNombres();
   M.rellenados = rellenaFabricante();
   M.solape = detectaSolape();
   MODELO_V++;
