@@ -337,11 +337,20 @@ function vCumplimiento(A, rows) {
    ========================================================================== */
 function vAplicaciones(A, rows) {
   if (S.sel.app) return vApp(A, rows, S.sel.app);
+  /* El recuento del catalogo suma POR VERSION, asi que un equipo con dos
+     entradas de la misma aplicacion cuenta dos veces y puede salir mas
+     instalaciones que maquinas hay. El indice guarda equipo por equipo y sabe
+     cuantos son de verdad; se calcula de una pasada para todas. Sin filtro,
+     que el indice no lo conoce. */
+  const filtrando = activeDims().length > 0 || !!S.q.trim();
+  const reales = (!filtrando && M.indice) ? M.indice.equiposPorApp() : null;
   const data = A.topApps.map(([k, n]) => {
     const r = rule(k) || {}, o = CMP.app.get(k) || { ok:0, warn:0, bad:0, total:n, pctOk:0, estado:'na' };
     const vm = A.appVerDev.get(k) || new Map();
+    const v = reales && reales.get(k);
     return { key:k, name: appLabel(k), vendor: pretty(vendorOfApp(k)), cat: r.cat || 'Otro',
-      inst:n, vers: vm.size, rec: r.rec || '—', pctOk: o.pctOk, bad: o.bad, estado: o.estado,
+      inst: v || n, infla: v && n > v + Math.max(5, v * 0.01) ? n : 0,
+      vers: vm.size, rec: r.rec || '—', pctOk: o.pctOk, bad: o.bad, estado: o.estado,
       gest: r.gest ? 'Sí' : 'No', crit: r.crit ? 1 : 0, _o:o };
   });
   // Cuantas puntuan de verdad. Con el alcance por defecto son las administradas
@@ -377,6 +386,9 @@ function vAplicaciones(A, rows) {
         { k:'gest', l:'Administrada' }, { k:'estado', l:'Estado' }],
       cell:(r,c) => {
         if (c.k === 'name') return (r.crit ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : '') + esc(r.name);
+        if (c.k === 'inst') return r.infla
+          ? `${fmt(r.inst)}<span class="mini" style="color:var(--warn-ink)" title="El catálogo cuenta ${fmt(r.infla)} instalaciones: hay equipos con más de una entrada de esta aplicación"> · ${fmt(r.infla)} inst.</span>`
+          : fmt(r.inst);
         if (c.k === 'rec') return `<span class="mono mini">${esc(r.rec)}</span>`;
         if (c.k === 'pctOk') return r.estado === 'na'
           ? `<span class="muted" title="${esc(SCOPE_LAB[scopeNote(r.key)] || 'No puntúa')}: no entra en el cálculo de cumplimiento">—</span>`
@@ -462,6 +474,22 @@ function vApp(A, rows, key) {
     : '<div class="empty">Se necesitan al menos dos lecturas guardadas en fechas distintas para ver la evolución</div>';
 
   const nota = scopeNote(key);
+
+  /* Cuantos equipos tienen esto, de verdad.
+     `appDev` mezcla dos unidades: los equipos que el detalle nombra, mas el
+     recuento de las filas del catalogo. Y el catalogo cuenta POR VERSION, asi
+     que un equipo con dos entradas de la misma aplicacion -32 y 64 bits, un
+     resto de desinstalacion, el instalador y el programa- suma dos. Por eso
+     podian salir mas instalaciones que maquinas hay.
+     El indice de instalaciones no tiene ese problema: guarda equipo por equipo,
+     asi que contar los distintos es la respuesta buena. */
+  // El mismo recuento que usa la tabla del catalogo, y por tanto el mismo
+  // numero en las dos pantallas. Ademas esta cacheado: `equiposDe` recorreria
+  // el indice entero otra vez solo para contar.
+  const equiposReales = (!filtrando && M.indice)
+    ? ((M.indice.equiposPorApp() || new Map()).get(key) || 0) : 0;
+  const infla = equiposReales > 0 && total > equiposReales + Math.max(5, equiposReales * 0.01);
+
   return `<div class="view-h"><div class="row">
       <div><div class="mini">${esc(pretty(vendorOfApp(key)))} · ${esc(r.cat || 'Sin categoría')}</div>
         <h1>${r.crit ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : ''}${esc(appLabel(key))}</h1></div>
@@ -470,7 +498,10 @@ function vApp(A, rows, key) {
       <button class="btn" data-filterapp="${esc(key)}">Filtrar el tablero por esta app</button>
     </div></div>
     <div class="sheet" style="margin-top:14px"><dl class="facts">
-      <div class="fact"><dt>Instalaciones</dt><dd class="big">${fmt(total)}</dd></div>
+      <div class="fact"><dt>${equiposReales ? 'Equipos' : 'Instalaciones'}</dt>
+        <dd class="big">${fmt(equiposReales || total)}</dd>
+        ${infla ? `<div class="mini" style="color:var(--warn-ink)">${fmt(total)} instalaciones:
+          hay equipos con más de una entrada de esta aplicación</div>` : ''}</div>
       <div class="fact"><dt>Versiones conviviendo</dt><dd class="big">${fmt(vm.size)}</dd></div>
       <div class="fact"><dt>Versión aprobada</dt><dd class="mono">${esc(r.rec || 'sin definir')}</dd></div>
       <div class="fact"><dt>Versión mínima</dt><dd class="mono">${esc(r.min || 'sin definir')}</dd></div>
@@ -483,6 +514,13 @@ function vApp(A, rows, key) {
       <div class="fact"><dt>Detección más antigua</dt><dd>${firstTs.length ? new Date(vMin(firstTs)).toLocaleDateString('es-CO') : '—'}</dd></div>
       <div class="fact"><dt>Última detección</dt><dd>${firstTs.length ? new Date(vMax(firstTs)).toLocaleDateString('es-CO') : '—'}</dd></div>
     </dl>
+    ${total > M.devInfo.size && M.devInfo.size ? `<div class="banner" style="margin:16px 0 0;border-color:rgba(208,59,59,.35)">${ico('shield')}<div>
+      <b>${fmt(total)} instalaciones para ${fmt(M.devInfo.size)} equipos.</b> No es un error de suma: el
+      catálogo cuenta por versión, y un equipo que tenga esta aplicación <b>más de una vez</b>
+      —entradas de 32 y 64 bits, un resto de desinstalación, el instalador aparte del programa—
+      aparece en cada una.${equiposReales ? ` Equipos distintos de verdad: <b>${fmt(equiposReales)}</b>.`
+        : ' Para saber cuántos equipos son en realidad hace falta el detalle con nombres.'}
+    </div></div>` : ''}
     ${nota ? `<div class="banner" style="margin:16px 0 0">${ico('info')}<div>
       <b>${esc(SCOPE_LAB[nota])}.</b> ${nota === 'fuera'
         ? 'Esta aplicación tiene un estándar definido pero no entra en el cálculo de cumplimiento, ' +

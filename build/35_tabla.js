@@ -83,9 +83,11 @@ function Indice(guardado) {
     cApp = Columna(0, guardado.cApp, n);
     cVer = Columna(0, guardado.cVer, n);
   }
+  let cacheEquiposApp;                   // se calcula una vez y no cambia
   return {
     get length() { return n; },
     add(dev, app, ver) {
+      cacheEquiposApp = undefined;
       cDev.push(dDev.id(dev)); cApp.push(dApp.id(app)); cVer.push(dVer.id(ver)); n++;
     },
 
@@ -129,6 +131,40 @@ function Indice(guardado) {
         if (p === undefined || (!VER_UNK.test(v) && verCmp(v, p) > 0)) salida.set(k, v);
       }
       return salida;
+    },
+
+    /**
+     * Cuantos equipos DISTINTOS tiene cada aplicacion, de una sola pasada.
+     *
+     * Preguntarlo aplicacion por aplicacion serian seis mil recorridos del
+     * indice entero. Y guardar un conjunto por aplicacion se comeria cientos de
+     * megas. Con un bit por par (aplicacion, equipo) cabe en unas decenas: para
+     * este inventario, 6.300 x 41.000 bits son 32 MB, y se cuenta al vuelo
+     * segun se marca, asi que es un recorrido y no dos.
+     *
+     * Si el parque fuera tan grande que ni eso cupiera, devuelve null y quien
+     * llama se queda con lo que tenia. Mejor no contestar que mentir.
+     */
+    equiposPorApp() {
+      if (cacheEquiposApp !== undefined) return cacheEquiposApp;
+      const nA = dApp.vals.length, nD = dDev.vals.length;
+      const bytes = Math.ceil(nA * nD / 8);
+      if (!nA || !nD || bytes > 96 * 1024 * 1024) return (cacheEquiposApp = null);
+      const visto = new Uint8Array(bytes);
+      const cuenta = new Int32Array(nA);
+      const aA = cApp.array, aD = cDev.array;
+      for (let i = 0; i < n; i++) {
+        const d = aD[i];
+        if (!d) continue;
+        const bit = aA[i] * nD + d;
+        const by = bit >> 3, ma = 1 << (bit & 7);
+        if (visto[by] & ma) continue;
+        visto[by] |= ma;
+        cuenta[aA[i]]++;
+      }
+      const salida = new Map();
+      for (let k = 1; k < nA; k++) if (cuenta[k]) salida.set(dApp.vals[k], cuenta[k]);
+      return (cacheEquiposApp = salida);
     },
 
     /** Si sabe algo de esta aplicacion. Barato: no recorre nada. */
