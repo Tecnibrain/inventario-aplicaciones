@@ -30,9 +30,6 @@
 .view-h p{margin:5px 0 0;color:var(--ink-3);font-size:13px;max-width:78ch}
 
 /* ---------- conmutador admin / cliente ---------- */
-.modesw{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;background:var(--surface-1)}
-.modesw button{padding:6px 13px;border-radius:999px;font-size:12px;font-weight:600;color:var(--ink-3)}
-.modesw button[aria-pressed="true"]{background:var(--brand);color:var(--brand-ink)}
 
 /* ---------- semaforo ---------- */
 .sem{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;white-space:nowrap}
@@ -131,8 +128,6 @@ table.mt select.cell{background:var(--surface-2);border:1px solid var(--line);bo
 .banner b{color:var(--ink)}
 
 /* ---------- informe cliente ---------- */
-body.mode-cliente .nav{display:none}
-body.mode-cliente .shell{grid-template-columns:minmax(0,1fr)}
 .rep{max-width:1120px;margin:0 auto}
 .rep-cover{border:1px solid var(--line-soft);border-radius:18px;padding:34px 36px;margin:8px 0 20px;
   background:linear-gradient(150deg,rgba(15,254,251,.09),transparent 58%),var(--surface-1)}

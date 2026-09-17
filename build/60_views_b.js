@@ -545,15 +545,110 @@ function vAdmin(A, rows) {
 }
 
 /* ---- registro de vistas ---- */
+/* ============================================================================
+   22b. VISTA · LINEA BASE
+   ---------------------------------------------------------------------------
+   Lo que la organizacion despliega y mantiene, y nada mas. El resto del
+   catalogo -seis mil aplicaciones- se sigue inventariando, pero aqui no pinta:
+   esta pantalla responde a «de lo mio, que esta al dia y que no».
+   ========================================================================== */
+function vLineaBase(A, rows) {
+  const lb = CFG.lineaBase || [];
+  const casadas = lb.filter(x => x.key);
+
+  if (!casadas.length) return viewHead('Línea base',
+      'La lista de lo que despliegas y la versión aprobada de cada cosa.') +
+    `<div class="mt-wrap"><div class="empty" style="padding:34px;line-height:1.7">
+      <b>Todavía no hay línea base.</b><br>
+      Es un Excel o CSV con dos columnas —<b>Aplicación</b> y <b>Versión</b>— y decide qué entra
+      en el cálculo de cumplimiento.<br>Sin ella puntuaría cualquier cosa que esté muy repartida,
+      runtimes y componentes de Windows incluidos, y el indicador deja de hablar de lo que gobiernas.
+      <div style="margin-top:16px"><button class="btn btn-p" data-go="admin">Cargarla en Administración</button></div>
+    </div></div>`;
+
+  const reales = M.indice ? M.indice.equiposPorApp() : null;
+  const data = casadas.map(x => {
+    const k = x.key, r = rule(k) || {};
+    const o = CMP.app.get(k) || { ok:0, warn:0, bad:0, na:0, total:0, pctOk:0, estado:'na' };
+    const vm = A.appVerDev.get(k) || new Map();
+    const tops = Array.from(vm.entries()).map(([v, s]) => [v, s.size]).sort((a, b) => b[1] - a[1]);
+    return { key:k, base:x.nombre, name: appLabel(k), rec: r.rec || '—',
+      top: tops[0] ? tops[0][0] : '—', topN: tops[0] ? tops[0][1] : 0,
+      vers: vm.size, eq: (reales && reales.get(k)) || (A.appDev.get(k) || { size:0 }).size,
+      pctOk: o.pctOk, atras: o.warn + o.bad, estado: o.estado, _o: o,
+      aviso: avisoVersionBase(k, r.rec) };
+  });
+
+  const t = CMP.tot || { pctOk:0, n:0, ok:0, warn:0, bad:0 };
+  const alDia = data.filter(d => d.pctOk >= 99.5).length;
+  const conAviso = data.filter(d => d.aviso).length;
+  const atrasTotal = data.reduce((s, d) => s + d.atras, 0);
+  const sinCasar = lb.filter(x => !x.key);
+
+  const retraso = data.filter(d => d.atras > 0).sort((a, b) => b.atras - a.atras).slice(0, 12);
+
+  return viewHead('Línea base', 'Lo que despliegas y mantienes. El resto del catálogo se inventaría, pero no puntúa aquí.') +
+    `<div class="grid kpis" style="margin:14px 0 4px">
+      ${kpi({ ic:'shield', label:'Aplicaciones medidas', value: fmt(casadas.length),
+        sub: sinCasar.length ? `<b>${fmt(sinCasar.length)}</b> de tu lista sin emparejar` : 'Toda tu lista está emparejada' })}
+      ${kpi({ ic:'shieldOk', label:'Cumplimiento', value: fmt1(t.pctOk) + ' %', meter: t.pctOk,
+        st: t.pctOk >= CFG.params.umbralOk ? 'ok' : t.pctOk >= CFG.params.umbralWarn ? 'warn' : 'bad',
+        sub:`Sobre <b>${fmt(t.n)}</b> instalaciones de la línea base` })}
+      ${kpi({ ic:'check', label:'Al día', value: fmt(alDia), st:'ok',
+        sub:`de ${fmt(data.length)} aplicaciones, con todo el parque en la versión aprobada` })}
+      ${kpi({ ic:'alert', label:'Instalaciones por detrás', value: fmt(atrasTotal),
+        st: atrasTotal ? 'warn' : 'ok', sub:'Lo que hay que mover para llegar al 100 %' })}
+    </div>` +
+    (conAviso ? `<div class="banner" style="margin:14px 0 0;border-color:rgba(214,158,46,.4)">${ico('info')}<div>
+      <b>${fmt(conAviso)} ${conAviso > 1 ? 'aplicaciones' : 'aplicación'} con la versión aprobada en otro formato.</b>
+      Pasa cuando la línea base nombra el release —«2402»— y el inventario reporta la compilación
+      —«24.2.2000.2031»—: comparadas como números, el parque entero sale atrasado y el porcentaje
+      no es verdad. Están marcadas en la tabla.
+    </div></div>` : '') +
+    (sinCasar.length ? `<div class="banner" style="margin:14px 0 0">${ico('info')}<div>
+      <b>${fmt(sinCasar.length)} de tu línea base no está${sinCasar.length > 1 ? 'n' : ''} emparejada${sinCasar.length > 1 ? 's' : ''}:</b>
+      ${sinCasar.map(x => '<b>' + esc(x.nombre) + '</b>').join(' · ')}.
+      O no aparecen en el inventario con ese nombre, o hay que elegirles la aplicación a mano.
+      <button class="btn" data-go="admin" style="margin-top:10px">Revisarlo en Administración</button>
+    </div></div>` : '') +
+    (retraso.length ? sec('Dónde está el retraso', 'Instalaciones por debajo de la versión aprobada') +
+      `<div class="gwide">` + card({ title:'Instalaciones por detrás', sub:'Pulsa una barra para filtrar el tablero por esa aplicación',
+        body: barH(retraso.map(d => [d.name, d.atras, 'appKey', d.key]),
+          { unit:'Instalaciones', W:560, labelW:210, trunc:30, rowH:25, aria:'Instalaciones por detrás' }),
+        table: twin(['Aplicación','Por detrás','Equipos'], retraso.map(d => [d.name, fmt(d.atras), fmt(d.eq)])) })
+      + `</div>` : '') +
+    sec('Estado de la línea base', 'Una fila por aplicación. Pulsa para ver su reparto de versiones y los equipos') +
+    mtable({ id:'lbase', title:'Cumplimiento y versiones', data, sort:{ k:'atras', d:-1 },
+      rowAttr: d => `data-goapp="${esc(d.key)}"`,
+      cols:[{ k:'name', l:'Aplicación', cls:'name' }, { k:'base', l:'En tu línea base' },
+        { k:'rec', l:'Aprobada' }, { k:'top', l:'Más desplegada' },
+        { k:'vers', l:'Versiones', n:true }, { k:'eq', l:'Equipos', n:true },
+        { k:'pctOk', l:'% al día', n:true }, { k:'atras', l:'Por detrás', n:true },
+        { k:'estado', l:'Reparto' }],
+      cell:(d, c) => {
+        if (c.k === 'rec') return `<span class="mono mini">${esc(d.rec)}</span>` +
+          (d.aviso ? `<div class="mini" style="color:var(--warn-ink)" title="${esc(d.aviso)}">otro formato ⚠</div>` : '');
+        if (c.k === 'top') return `<span class="mono mini">${esc(d.top)}</span>` +
+          `<div class="mini" style="color:var(--ink-4)">${fmt(d.topN)} equipos</div>`;
+        if (c.k === 'pctOk') return d.aviso ? '<span class="muted" title="la versión aprobada no compara">—</span>'
+          : `<span style="color:${d.pctOk>=95?'var(--ok-ink)':d.pctOk>=60?'var(--warn-ink)':'var(--crit-ink)'}">${fmt1(d.pctOk)} %</span>`;
+        if (c.k === 'estado') return cbar(d._o, true);
+        if (c.k === 'base') return `<span class="mini" style="color:var(--ink-4)">${esc(truncate(d.base, 30))}</span>`;
+        if (c.n) return fmt(d[c.k]);
+        return esc(d[c.k]);
+      } });
+}
+
 const VIEWS = {
-  resumen:      { l:'Resumen',       ic:'home',    f:vResumen,      cli:true },
+  resumen:      { l:'Resumen',       ic:'home',    f:vResumen },
+  base:         { l:'Línea base',    ic:'shield',  f:vLineaBase },
   cumplimiento: { l:'Cumplimiento',  ic:'shieldOk',f:vCumplimiento },
   aplicaciones: { l:'Aplicaciones',  ic:'grid',    f:vAplicaciones },
   equipos:      { l:'Equipos',       ic:'pc',      f:vEquipos },
   versiones:    { l:'Versiones',     ic:'fork',    f:vVersiones },
-  tendencias:   { l:'Tendencias',    ic:'trend',   f:vTendencias,   cli:true },
+  tendencias:   { l:'Tendencias',    ic:'trend',   f:vTendencias },
   mapas:        { l:'Mapas',         ic:'map',     f:vMapas },
   datos:        { l:'Origen de datos', ic:'db',    f:vDatos },
-  informe:      { l:'Informe cliente', ic:'file',  f:vInforme,      cli:true },
+  informe:      { l:'Informe cliente', ic:'file',  f:vInforme },
   admin:        { l:'Administración',ic:'cog',     f:vAdmin }
 };

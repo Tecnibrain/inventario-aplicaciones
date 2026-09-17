@@ -313,9 +313,6 @@ footer b{color:var(--ink-3);font-weight:600}
 .view-h p{margin:5px 0 0;color:var(--ink-3);font-size:13px;max-width:78ch}
 
 /* ---------- conmutador admin / cliente ---------- */
-.modesw{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;background:var(--surface-1)}
-.modesw button{padding:6px 13px;border-radius:999px;font-size:12px;font-weight:600;color:var(--ink-3)}
-.modesw button[aria-pressed="true"]{background:var(--brand);color:var(--brand-ink)}
 
 /* ---------- semaforo ---------- */
 .sem{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;white-space:nowrap}
@@ -414,8 +411,6 @@ table.mt select.cell{background:var(--surface-2);border:1px solid var(--line);bo
 .banner b{color:var(--ink)}
 
 /* ---------- informe cliente ---------- */
-body.mode-cliente .nav{display:none}
-body.mode-cliente .shell{grid-template-columns:minmax(0,1fr)}
 .rep{max-width:1120px;margin:0 auto}
 .rep-cover{border:1px solid var(--line-soft);border-radius:18px;padding:34px 36px;margin:8px 0 20px;
   background:linear-gradient(150deg,rgba(15,254,251,.09),transparent 58%),var(--surface-1)}
@@ -493,10 +488,6 @@ body.mode-cliente .shell{grid-template-columns:minmax(0,1fr)}
       </div>
     </div>
     <div class="topbar-actions" id="topActions" hidden>
-      <div class="modesw" role="group" aria-label="Nivel de vista">
-        <button id="mAdmin" aria-pressed="true" title="Vista técnica completa">Administrador</button>
-        <button id="mCliente" aria-pressed="false" title="Vista ejecutiva sin tecnicismos">Cliente</button>
-      </div>
       <div class="filemeta" title="Origen de datos cargado">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
@@ -3574,7 +3565,7 @@ const DIMS = {
   cat: 'Categoría', gestK: 'Administración'
 };
 const S = {
-  f: {}, q: '', view: 'resumen', mode: 'admin',
+  f: {}, q: '', view: 'resumen',
   sel: { app: null, device: null },
   sort: {}, limit: {}, qt: {}
 };
@@ -3999,7 +3990,9 @@ function aplicaLineaBase(pares) {
     });
     n++;
   }
-  CFG.lineaBase = pares.filter(p => p.key).map(p => ({ nombre: p.nombre, ver: p.ver, key: p.key }));
+  // La lista entera, tambien lo que no caso: si solo se guardara lo emparejado,
+  // el tablero diria que esta todo resuelto y no habria forma de ver que falta.
+  CFG.lineaBase = pares.map(p => ({ nombre: p.nombre, ver: p.ver, key: p.key || '' }));
   cfgSave();
   REGLAS_V++;
   return n;
@@ -4039,8 +4032,8 @@ const EST_CLS = { ok: 'ok', warn: 'warn', bad: 'bad', na: 'off' };
 let LB_SET = null, LB_SET_DE = null;
 function clavesBase() {
   const lb = CFG.lineaBase;
-  if (!lb || !lb.length) return null;
-  if (LB_SET_DE !== lb) { LB_SET = new Set(lb.map(x => x.key)); LB_SET_DE = lb; }
+  if (!lb || !lb.some(x => x.key)) return null;
+  if (LB_SET_DE !== lb) { LB_SET = new Set(lb.filter(x => x.key).map(x => x.key)); LB_SET_DE = lb; }
   return LB_SET;
 }
 
@@ -5577,16 +5570,111 @@ function vAdmin(A, rows) {
 }
 
 /* ---- registro de vistas ---- */
+/* ============================================================================
+   22b. VISTA · LINEA BASE
+   ---------------------------------------------------------------------------
+   Lo que la organizacion despliega y mantiene, y nada mas. El resto del
+   catalogo -seis mil aplicaciones- se sigue inventariando, pero aqui no pinta:
+   esta pantalla responde a «de lo mio, que esta al dia y que no».
+   ========================================================================== */
+function vLineaBase(A, rows) {
+  const lb = CFG.lineaBase || [];
+  const casadas = lb.filter(x => x.key);
+
+  if (!casadas.length) return viewHead('Línea base',
+      'La lista de lo que despliegas y la versión aprobada de cada cosa.') +
+    `<div class="mt-wrap"><div class="empty" style="padding:34px;line-height:1.7">
+      <b>Todavía no hay línea base.</b><br>
+      Es un Excel o CSV con dos columnas —<b>Aplicación</b> y <b>Versión</b>— y decide qué entra
+      en el cálculo de cumplimiento.<br>Sin ella puntuaría cualquier cosa que esté muy repartida,
+      runtimes y componentes de Windows incluidos, y el indicador deja de hablar de lo que gobiernas.
+      <div style="margin-top:16px"><button class="btn btn-p" data-go="admin">Cargarla en Administración</button></div>
+    </div></div>`;
+
+  const reales = M.indice ? M.indice.equiposPorApp() : null;
+  const data = casadas.map(x => {
+    const k = x.key, r = rule(k) || {};
+    const o = CMP.app.get(k) || { ok:0, warn:0, bad:0, na:0, total:0, pctOk:0, estado:'na' };
+    const vm = A.appVerDev.get(k) || new Map();
+    const tops = Array.from(vm.entries()).map(([v, s]) => [v, s.size]).sort((a, b) => b[1] - a[1]);
+    return { key:k, base:x.nombre, name: appLabel(k), rec: r.rec || '—',
+      top: tops[0] ? tops[0][0] : '—', topN: tops[0] ? tops[0][1] : 0,
+      vers: vm.size, eq: (reales && reales.get(k)) || (A.appDev.get(k) || { size:0 }).size,
+      pctOk: o.pctOk, atras: o.warn + o.bad, estado: o.estado, _o: o,
+      aviso: avisoVersionBase(k, r.rec) };
+  });
+
+  const t = CMP.tot || { pctOk:0, n:0, ok:0, warn:0, bad:0 };
+  const alDia = data.filter(d => d.pctOk >= 99.5).length;
+  const conAviso = data.filter(d => d.aviso).length;
+  const atrasTotal = data.reduce((s, d) => s + d.atras, 0);
+  const sinCasar = lb.filter(x => !x.key);
+
+  const retraso = data.filter(d => d.atras > 0).sort((a, b) => b.atras - a.atras).slice(0, 12);
+
+  return viewHead('Línea base', 'Lo que despliegas y mantienes. El resto del catálogo se inventaría, pero no puntúa aquí.') +
+    `<div class="grid kpis" style="margin:14px 0 4px">
+      ${kpi({ ic:'shield', label:'Aplicaciones medidas', value: fmt(casadas.length),
+        sub: sinCasar.length ? `<b>${fmt(sinCasar.length)}</b> de tu lista sin emparejar` : 'Toda tu lista está emparejada' })}
+      ${kpi({ ic:'shieldOk', label:'Cumplimiento', value: fmt1(t.pctOk) + ' %', meter: t.pctOk,
+        st: t.pctOk >= CFG.params.umbralOk ? 'ok' : t.pctOk >= CFG.params.umbralWarn ? 'warn' : 'bad',
+        sub:`Sobre <b>${fmt(t.n)}</b> instalaciones de la línea base` })}
+      ${kpi({ ic:'check', label:'Al día', value: fmt(alDia), st:'ok',
+        sub:`de ${fmt(data.length)} aplicaciones, con todo el parque en la versión aprobada` })}
+      ${kpi({ ic:'alert', label:'Instalaciones por detrás', value: fmt(atrasTotal),
+        st: atrasTotal ? 'warn' : 'ok', sub:'Lo que hay que mover para llegar al 100 %' })}
+    </div>` +
+    (conAviso ? `<div class="banner" style="margin:14px 0 0;border-color:rgba(214,158,46,.4)">${ico('info')}<div>
+      <b>${fmt(conAviso)} ${conAviso > 1 ? 'aplicaciones' : 'aplicación'} con la versión aprobada en otro formato.</b>
+      Pasa cuando la línea base nombra el release —«2402»— y el inventario reporta la compilación
+      —«24.2.2000.2031»—: comparadas como números, el parque entero sale atrasado y el porcentaje
+      no es verdad. Están marcadas en la tabla.
+    </div></div>` : '') +
+    (sinCasar.length ? `<div class="banner" style="margin:14px 0 0">${ico('info')}<div>
+      <b>${fmt(sinCasar.length)} de tu línea base no está${sinCasar.length > 1 ? 'n' : ''} emparejada${sinCasar.length > 1 ? 's' : ''}:</b>
+      ${sinCasar.map(x => '<b>' + esc(x.nombre) + '</b>').join(' · ')}.
+      O no aparecen en el inventario con ese nombre, o hay que elegirles la aplicación a mano.
+      <button class="btn" data-go="admin" style="margin-top:10px">Revisarlo en Administración</button>
+    </div></div>` : '') +
+    (retraso.length ? sec('Dónde está el retraso', 'Instalaciones por debajo de la versión aprobada') +
+      `<div class="gwide">` + card({ title:'Instalaciones por detrás', sub:'Pulsa una barra para filtrar el tablero por esa aplicación',
+        body: barH(retraso.map(d => [d.name, d.atras, 'appKey', d.key]),
+          { unit:'Instalaciones', W:560, labelW:210, trunc:30, rowH:25, aria:'Instalaciones por detrás' }),
+        table: twin(['Aplicación','Por detrás','Equipos'], retraso.map(d => [d.name, fmt(d.atras), fmt(d.eq)])) })
+      + `</div>` : '') +
+    sec('Estado de la línea base', 'Una fila por aplicación. Pulsa para ver su reparto de versiones y los equipos') +
+    mtable({ id:'lbase', title:'Cumplimiento y versiones', data, sort:{ k:'atras', d:-1 },
+      rowAttr: d => `data-goapp="${esc(d.key)}"`,
+      cols:[{ k:'name', l:'Aplicación', cls:'name' }, { k:'base', l:'En tu línea base' },
+        { k:'rec', l:'Aprobada' }, { k:'top', l:'Más desplegada' },
+        { k:'vers', l:'Versiones', n:true }, { k:'eq', l:'Equipos', n:true },
+        { k:'pctOk', l:'% al día', n:true }, { k:'atras', l:'Por detrás', n:true },
+        { k:'estado', l:'Reparto' }],
+      cell:(d, c) => {
+        if (c.k === 'rec') return `<span class="mono mini">${esc(d.rec)}</span>` +
+          (d.aviso ? `<div class="mini" style="color:var(--warn-ink)" title="${esc(d.aviso)}">otro formato ⚠</div>` : '');
+        if (c.k === 'top') return `<span class="mono mini">${esc(d.top)}</span>` +
+          `<div class="mini" style="color:var(--ink-4)">${fmt(d.topN)} equipos</div>`;
+        if (c.k === 'pctOk') return d.aviso ? '<span class="muted" title="la versión aprobada no compara">—</span>'
+          : `<span style="color:${d.pctOk>=95?'var(--ok-ink)':d.pctOk>=60?'var(--warn-ink)':'var(--crit-ink)'}">${fmt1(d.pctOk)} %</span>`;
+        if (c.k === 'estado') return cbar(d._o, true);
+        if (c.k === 'base') return `<span class="mini" style="color:var(--ink-4)">${esc(truncate(d.base, 30))}</span>`;
+        if (c.n) return fmt(d[c.k]);
+        return esc(d[c.k]);
+      } });
+}
+
 const VIEWS = {
-  resumen:      { l:'Resumen',       ic:'home',    f:vResumen,      cli:true },
+  resumen:      { l:'Resumen',       ic:'home',    f:vResumen },
+  base:         { l:'Línea base',    ic:'shield',  f:vLineaBase },
   cumplimiento: { l:'Cumplimiento',  ic:'shieldOk',f:vCumplimiento },
   aplicaciones: { l:'Aplicaciones',  ic:'grid',    f:vAplicaciones },
   equipos:      { l:'Equipos',       ic:'pc',      f:vEquipos },
   versiones:    { l:'Versiones',     ic:'fork',    f:vVersiones },
-  tendencias:   { l:'Tendencias',    ic:'trend',   f:vTendencias,   cli:true },
+  tendencias:   { l:'Tendencias',    ic:'trend',   f:vTendencias },
   mapas:        { l:'Mapas',         ic:'map',     f:vMapas },
   datos:        { l:'Origen de datos', ic:'db',    f:vDatos },
-  informe:      { l:'Informe cliente', ic:'file',  f:vInforme,      cli:true },
+  informe:      { l:'Informe cliente', ic:'file',  f:vInforme },
   admin:        { l:'Administración',ic:'cog',     f:vAdmin }
 };
 
@@ -6908,7 +6996,6 @@ function vDatos(A, rows) {
    24. NAVEGACION Y RENDER
    ========================================================================== */
 function renderNav(A) {
-  const cli = S.mode === 'cliente';
   const badge = {
     cumplimiento: CMP.tot.bad ? { n: CMP.tot.bad, c: 'alert' } : null,
     equipos: CMP.stale.size ? { n: CMP.stale.size, c: 'warn' } : null,
@@ -6918,13 +7005,12 @@ function renderNav(A) {
   const item = id => {
     const v = VIEWS[id], b = badge[id];
     return `<a data-go="${id}"${S.view === id ? ' aria-current="page"' : ''} tabindex="0" role="link">` +
-      `${ico(v.ic)}${esc(v.l)}${b && !cli ? `<b class="${b.c}">${fmt(b.n)}</b>` : ''}</a>`;
+      `${ico(v.ic)}${esc(v.l)}${b ? `<b class="${b.c}">${fmt(b.n)}</b>` : ''}</a>`;
   };
-  $('#nav').innerHTML = cli
-    ? `<div class="nav-grp">Vista cliente</div>` + ['resumen','informe','tendencias'].map(item).join('')
-    : `<div class="nav-grp">Panel</div>` + ['resumen','cumplimiento'].map(item).join('') +
-      `<div class="nav-grp">Inventario</div>` + ['aplicaciones','equipos','versiones','mapas'].map(item).join('') +
-      `<div class="nav-grp">Gestión</div>` + ['datos','tendencias','informe','admin'].map(item).join('');
+  $('#nav').innerHTML =
+    `<div class="nav-grp">Panel</div>` + ['resumen','base','cumplimiento'].map(item).join('') +
+    `<div class="nav-grp">Inventario</div>` + ['aplicaciones','equipos','versiones','mapas'].map(item).join('') +
+    `<div class="nav-grp">Gestión</div>` + ['datos','tendencias','informe','admin'].map(item).join('');
 }
 
 function fsel(dim, label, entries) {
@@ -7010,8 +7096,6 @@ function render() {
   RAF = setTimeout(() => {
     TIPS = []; CARD_N = 0;
     const { rows, A } = modeloVista();
-    document.body.dataset.mode = S.mode;
-    document.body.classList.toggle('mode-cliente', S.mode === 'cliente');
     renderNav(A); renderFilters(); renderChips();
     const v = VIEWS[S.view] || VIEWS.resumen;
     $('#view').innerHTML = v.f(A, rows);
@@ -7020,8 +7104,6 @@ function render() {
     $('#fileName').title = M.sources.map(s => s.name + ' (' + s.shape + ', ' + fmt(s.filas) + ')').join(String.fromCharCode(10));
     $('#fileRows').textContent = '· ' + fmt(M.rows.length) + ' filas';
     $('#brandSub').textContent = CFG.org || 'Gestión de software y cumplimiento';
-    $('#mAdmin').setAttribute('aria-pressed', S.mode === 'admin' ? 'true' : 'false');
-    $('#mCliente').setAttribute('aria-pressed', S.mode === 'cliente' ? 'true' : 'false');
   }, 0);
 }
 
@@ -7259,11 +7341,6 @@ document.addEventListener('click', async e => {
     render(); return;
   }
   if ((el = cl('[data-more]'))) { const id = el.getAttribute('data-more'); S.limit[id] = limitOf(id) + 60; render(); return; }
-  if (t.id === 'mAdmin' || t.id === 'mCliente') {
-    S.mode = t.id === 'mAdmin' ? 'admin' : 'cliente';
-    if (S.mode === 'cliente' && !VIEWS[S.view].cli) { go('informe'); return; }
-    render(); return;
-  }
   if (t.id === 'histClear') {
     if (confirm('¿Borrar todas las lecturas históricas guardadas en este navegador?')) {
       HIST = []; histSave(); toast('Histórico borrado'); render();
@@ -7591,7 +7668,6 @@ $('#cfgFile').addEventListener('change', async e => {
 });
 
 $('#btnPrint').addEventListener('click', () => {
-  if (S.mode === 'cliente' && S.view !== 'informe') go('informe');
   setTimeout(() => window.print(), 120);
 });
 /* Cargar: anadir al conjunto actual o empezar de cero. */

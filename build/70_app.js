@@ -3,7 +3,6 @@
    24. NAVEGACION Y RENDER
    ========================================================================== */
 function renderNav(A) {
-  const cli = S.mode === 'cliente';
   const badge = {
     cumplimiento: CMP.tot.bad ? { n: CMP.tot.bad, c: 'alert' } : null,
     equipos: CMP.stale.size ? { n: CMP.stale.size, c: 'warn' } : null,
@@ -13,13 +12,12 @@ function renderNav(A) {
   const item = id => {
     const v = VIEWS[id], b = badge[id];
     return `<a data-go="${id}"${S.view === id ? ' aria-current="page"' : ''} tabindex="0" role="link">` +
-      `${ico(v.ic)}${esc(v.l)}${b && !cli ? `<b class="${b.c}">${fmt(b.n)}</b>` : ''}</a>`;
+      `${ico(v.ic)}${esc(v.l)}${b ? `<b class="${b.c}">${fmt(b.n)}</b>` : ''}</a>`;
   };
-  $('#nav').innerHTML = cli
-    ? `<div class="nav-grp">Vista cliente</div>` + ['resumen','informe','tendencias'].map(item).join('')
-    : `<div class="nav-grp">Panel</div>` + ['resumen','cumplimiento'].map(item).join('') +
-      `<div class="nav-grp">Inventario</div>` + ['aplicaciones','equipos','versiones','mapas'].map(item).join('') +
-      `<div class="nav-grp">Gestión</div>` + ['datos','tendencias','informe','admin'].map(item).join('');
+  $('#nav').innerHTML =
+    `<div class="nav-grp">Panel</div>` + ['resumen','base','cumplimiento'].map(item).join('') +
+    `<div class="nav-grp">Inventario</div>` + ['aplicaciones','equipos','versiones','mapas'].map(item).join('') +
+    `<div class="nav-grp">Gestión</div>` + ['datos','tendencias','informe','admin'].map(item).join('');
 }
 
 function fsel(dim, label, entries) {
@@ -105,8 +103,6 @@ function render() {
   RAF = setTimeout(() => {
     TIPS = []; CARD_N = 0;
     const { rows, A } = modeloVista();
-    document.body.dataset.mode = S.mode;
-    document.body.classList.toggle('mode-cliente', S.mode === 'cliente');
     renderNav(A); renderFilters(); renderChips();
     const v = VIEWS[S.view] || VIEWS.resumen;
     $('#view').innerHTML = v.f(A, rows);
@@ -115,8 +111,6 @@ function render() {
     $('#fileName').title = M.sources.map(s => s.name + ' (' + s.shape + ', ' + fmt(s.filas) + ')').join(String.fromCharCode(10));
     $('#fileRows').textContent = '· ' + fmt(M.rows.length) + ' filas';
     $('#brandSub').textContent = CFG.org || 'Gestión de software y cumplimiento';
-    $('#mAdmin').setAttribute('aria-pressed', S.mode === 'admin' ? 'true' : 'false');
-    $('#mCliente').setAttribute('aria-pressed', S.mode === 'cliente' ? 'true' : 'false');
   }, 0);
 }
 
@@ -354,11 +348,6 @@ document.addEventListener('click', async e => {
     render(); return;
   }
   if ((el = cl('[data-more]'))) { const id = el.getAttribute('data-more'); S.limit[id] = limitOf(id) + 60; render(); return; }
-  if (t.id === 'mAdmin' || t.id === 'mCliente') {
-    S.mode = t.id === 'mAdmin' ? 'admin' : 'cliente';
-    if (S.mode === 'cliente' && !VIEWS[S.view].cli) { go('informe'); return; }
-    render(); return;
-  }
   if (t.id === 'histClear') {
     if (confirm('¿Borrar todas las lecturas históricas guardadas en este navegador?')) {
       HIST = []; histSave(); toast('Histórico borrado'); render();
@@ -686,7 +675,6 @@ $('#cfgFile').addEventListener('change', async e => {
 });
 
 $('#btnPrint').addEventListener('click', () => {
-  if (S.mode === 'cliente' && S.view !== 'informe') go('informe');
   setTimeout(() => window.print(), 120);
 });
 /* Cargar: anadir al conjunto actual o empezar de cero. */

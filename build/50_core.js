@@ -10,7 +10,7 @@ const DIMS = {
   cat: 'Categoría', gestK: 'Administración'
 };
 const S = {
-  f: {}, q: '', view: 'resumen', mode: 'admin',
+  f: {}, q: '', view: 'resumen',
   sel: { app: null, device: null },
   sort: {}, limit: {}, qt: {}
 };
@@ -435,7 +435,9 @@ function aplicaLineaBase(pares) {
     });
     n++;
   }
-  CFG.lineaBase = pares.filter(p => p.key).map(p => ({ nombre: p.nombre, ver: p.ver, key: p.key }));
+  // La lista entera, tambien lo que no caso: si solo se guardara lo emparejado,
+  // el tablero diria que esta todo resuelto y no habria forma de ver que falta.
+  CFG.lineaBase = pares.map(p => ({ nombre: p.nombre, ver: p.ver, key: p.key || '' }));
   cfgSave();
   REGLAS_V++;
   return n;
@@ -475,8 +477,8 @@ const EST_CLS = { ok: 'ok', warn: 'warn', bad: 'bad', na: 'off' };
 let LB_SET = null, LB_SET_DE = null;
 function clavesBase() {
   const lb = CFG.lineaBase;
-  if (!lb || !lb.length) return null;
-  if (LB_SET_DE !== lb) { LB_SET = new Set(lb.map(x => x.key)); LB_SET_DE = lb; }
+  if (!lb || !lb.some(x => x.key)) return null;
+  if (LB_SET_DE !== lb) { LB_SET = new Set(lb.filter(x => x.key).map(x => x.key)); LB_SET_DE = lb; }
   return LB_SET;
 }
 
