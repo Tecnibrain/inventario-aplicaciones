@@ -302,6 +302,7 @@ async function importarGrande(file, opts, onProg) {
   M.aggFull = aggregate(M.rows);
   M.effVer = effVersions(M.rows);
   seedCatalog();
+  reaplicaLineaBase();
   histSnapshot();
   aviso(1, filas, 'Listo');
 
@@ -544,6 +545,7 @@ async function importarParquet(file, opts, onProg) {
   M.aggFull = aggregate(M.rows);
   M.effVer = effVersions(M.rows);
   seedCatalog();
+  reaplicaLineaBase();
   histSnapshot();
   aviso(1, filas, 'Listo');
 

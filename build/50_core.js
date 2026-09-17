@@ -335,6 +335,119 @@ function seedCatalog() {
 }
 
 /* ============================================================================
+   9b. LINEA BASE  ·  que se mide, y contra que version
+   ---------------------------------------------------------------------------
+   El archivo de linea base no es un inventario: es el estandar. Trae la lista
+   de aplicaciones que la organizacion despliega y la version aprobada de cada
+   una, y eso es justo lo que decide que entra en el calculo de cumplimiento.
+
+   Sus nombres no son los del inventario y no tienen por que serlo: la linea
+   base los llama por el paquete de despliegue -«Netskope 132.0.20.2563»,
+   «BCO_CORTEX_LB_UPD»- y el inventario por el nombre del programa -«Netskope
+   Client», «Cortex XDR»-. Se proponen candidatos y decide una persona: acertar
+   del todo a maquina no se puede, y equivocarse en silencio seria peor.
+   ========================================================================== */
+/* Lo que en un nombre de paquete no identifica al producto. */
+const LB_RUIDO = new Set(['bco', 'lb', 'upd', 'ver', 'cliente', 'client', 'admin',
+  'x64', 'x86', 'win', 'windows', 'setup', 'install', 'update',
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
+  'septiembre', 'octubre', 'noviembre', 'diciembre']);
+
+const lbPrefijo = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+
+/**
+ * Que aplicaciones del inventario podrian ser esta de la linea base.
+ *
+ * Devuelve las mejores, con el motivo y cuantos equipos la tienen. La cobertura
+ * suma puntos a proposito: la linea base son programas que se despliegan al
+ * parque, asi que entre dos candidatos parecidos el que esta en treinta mil
+ * equipos es casi siempre el bueno y el que esta en siete casi nunca.
+ */
+/**
+ * Si un candidato es lo bastante bueno como para darlo por hecho.
+ *
+ * Con el nombre claro -exacto, o uno de los dos amplia al otro- basta. Si el
+ * nombre solo se parece, hace falta ademas que la aplicacion este desplegada de
+ * verdad: la linea base son programas del parque, asi que un parecido flojo
+ * sobre una aplicacion de dos equipos casi nunca es el bueno. Lo demas se deja
+ * sin marcar, que es mas honesto que acertar a medias.
+ */
+const lbSeguro = c => c && (c.pn >= 70 || (c.pn >= 45 && c.n >= 1000));
+
+function candidatosBase(nombre, catalogo) {
+  const f = formaDe(normApp(nombre));
+  if (!f) return [];
+  const piezas = String(nombre).split(/[^A-Za-z0-9]+/).map(formaDe)
+    .filter(x => x.length >= 4 && !LB_RUIDO.has(x) && !/^\d+$/.test(x));
+  const out = [];
+  for (const c of catalogo) {
+    if (!c.f) continue;
+    let p = 0, por = '';
+    if (c.f === f) { p = 100; por = 'nombre exacto'; }
+    else if (c.f.startsWith(f)) { p = 82 - Math.min(20, (c.f.length - f.length) / 3); por = 'el inventario lo amplía'; }
+    else if (f.startsWith(c.f) && c.f.length >= 4) { p = 74 - Math.min(20, (f.length - c.f.length) / 3); por = 'la línea base lo amplía'; }
+    else {
+      const pre = lbPrefijo(f, c.f);
+      if (pre >= 6 && pre >= Math.min(f.length, c.f.length) * 0.55) { p = 45 + pre; por = 'mismo principio'; }
+      else if (c.f.includes(f) && f.length >= 5) { p = 52; por = 'contenido en el nombre'; }
+      else if (f.includes(c.f) && c.f.length >= 5) { p = 48; por = 'contiene al nombre'; }
+      // Una palabra larga y rara identifica mucho mejor que una corta:
+      // «postscript» o «clearpass» casi no aparecen por casualidad, «core» si.
+      else for (const t of piezas) if (c.f.includes(t)) { p = Math.max(p, 36 + t.length * 1.5); por = 'por la palabra «' + t + '»'; }
+    }
+    // `pn` es lo que dice el NOMBRE y `p` lo que dice el nombre mas la
+    // cobertura. Hacen falta las dos: la cobertura sirve para ordenar, pero
+    // para dar una fila por buena sin preguntar tiene que hablar el nombre.
+    if (p > 0) out.push({ k: c.k, n: c.n, por, pn: p, p: p + Math.min(13, Math.log10(c.n + 1) * 3.2) });
+  }
+  return out.sort((a, b) => b.p - a.p).slice(0, 4);
+}
+
+/** El catalogo en la forma que el emparejador necesita, con equipos de verdad. */
+function catalogoParaBase() {
+  const A = M.aggFull;
+  if (!A || !A.appDev) return [];
+  const reales = M.indice ? M.indice.equiposPorApp() : null;
+  return Array.from(A.appDev.keys()).map(k => ({
+    k, f: formaDe(k.slice(k.indexOf(' / ') + 3)),
+    n: (reales && reales.get(k)) || A.appDev.get(k).size
+  }));
+}
+
+/**
+ * Aplica la linea base al estandar.
+ *
+ * Lo que entra queda marcado como administrado, que es lo que lo mete en el
+ * calculo de cumplimiento, y con `auto` a falso para que el sembrado
+ * automatico no lo pise despues.
+ */
+function aplicaLineaBase(pares) {
+  let n = 0;
+  for (const p of pares) {
+    if (!p.key) continue;
+    const prev = CFG.apps[p.key] || {};
+    CFG.apps[p.key] = Object.assign({}, prev, {
+      rec: p.ver || prev.rec || '',
+      min: prev.min || p.ver || '',
+      gest: true, auto: false,
+      estado: prev.estado || 'permitida',
+      cat: prev.cat || guessCat(p.key)
+    });
+    n++;
+  }
+  CFG.lineaBase = pares.filter(p => p.key).map(p => ({ nombre: p.nombre, ver: p.ver, key: p.key }));
+  cfgSave();
+  REGLAS_V++;
+  return n;
+}
+
+/** Al cargar otro inventario, la linea base se vuelve a aplicar sola. */
+function reaplicaLineaBase() {
+  if (!CFG.lineaBase || !CFG.lineaBase.length) return 0;
+  return aplicaLineaBase(CFG.lineaBase.slice());
+}
+
+/* ============================================================================
    10. MOTOR DE CUMPLIMIENTO
    ========================================================================== */
 const CMP = { rowState: new Uint8Array(0), dev: new Map(), app: new Map(), tot: null, stale: new Set() };
@@ -357,11 +470,28 @@ const EST_CLS = { ok: 'ok', warn: 'warn', bad: 'bad', na: 'off' };
  * que el administrador gobierna: las administradas, las criticas y las
  * expresamente no permitidas. Puede ampliarse a todo el catalogo.
  */
+/* Las claves de la linea base, para no rehacer el conjunto en cada fila. Se
+   recalcula cuando la lista cambia, que es lo unico de lo que depende. */
+let LB_SET = null, LB_SET_DE = null;
+function clavesBase() {
+  const lb = CFG.lineaBase;
+  if (!lb || !lb.length) return null;
+  if (LB_SET_DE !== lb) { LB_SET = new Set(lb.map(x => x.key)); LB_SET_DE = lb; }
+  return LB_SET;
+}
+
 function inScope(k) {
   const r = rule(k);
   if (!r) return false;
   if (r.estado === 'no-permitida') return true;
   if (CFG.params.alcance === 'todas') return true;
+  /* Con una linea base cargada, el alcance ES la linea base. Es la lista de lo
+     que la organizacion despliega y mantiene, asi que medir ademas lo que el
+     sembrado automatico adivino -un runtime que esta en el 95 % del parque- la
+     diluye: el indicador deja de hablar de lo que alguien gobierna. Lo marcado
+     a mano como critico sigue contando; lo marcado por la maquina, no. */
+  const base = clavesBase();
+  if (base) return base.has(k) || !!(r.crit && !r.auto);
   return !!(r.gest || r.crit);
 }
 /** Estado de una version concreta frente a su regla. */

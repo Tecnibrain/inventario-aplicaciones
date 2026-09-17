@@ -339,6 +339,73 @@ function vInforme(A, rows) {
 /* ============================================================================
    23. VISTA · ADMINISTRACION
    ========================================================================== */
+/* Lo cargado del archivo, a la espera de que alguien lo revise. Vive aqui y no
+   en CFG: hasta que no se aplica no es el estandar de nadie. */
+const LB = { filas: [], archivo: '' };
+
+/**
+ * La revision antes de aplicar.
+ *
+ * Se ensena lo que el emparejador propone y por que, con cuantos equipos tiene
+ * cada candidato, y se deja cambiar o descartar fila por fila. El numero de
+ * equipos es lo que mas ayuda a decidir: la linea base son programas que se
+ * despliegan al parque, asi que el candidato de treinta mil equipos casi
+ * siempre es el bueno y el de siete casi nunca.
+ */
+/**
+ * Avisa cuando la version aprobada no se parece a ninguna de las detectadas.
+ *
+ * Pasa cuando los dos lados nombran la version de forma distinta: la linea base
+ * dice «2402» -el nombre del release de Citrix Workspace- y el inventario
+ * reporta «24.2.2000.2031», que es la compilacion. Comparadas como numeros, 2402
+ * queda por encima de 24 y TODO el parque sale atrasado: un 0 % que no es
+ * verdad. Mejor decirlo antes de aplicarlo que dejar que alguien actue sobre el.
+ */
+function avisoVersionBase(key, ver) {
+  if (!ver || !key || !M.aggFull) return '';
+  const vm = M.aggFull.appVerDev.get(key);
+  if (!vm || !vm.size) return '';
+  const cab = String(ver).split('.')[0].replace(/\D/g, '');
+  if (!cab) return '';
+  for (const v of vm.keys()) if (String(v).split('.')[0].replace(/\D/g, '') === cab) return '';
+  const top = Array.from(vm.entries()).sort((a, b) => b[1].size - a[1].size)[0];
+  return 'ninguna detectada empieza por «' + cab + '»; la más común es ' + top[0];
+}
+
+function seccionLineaBase() {
+  const casadas = LB.filas.filter(f => f.key).length;
+  const filas = LB.filas.map((f, i) => `<tr>
+      <td class="name">${esc(f.nombre)}</td>
+      <td><span class="mono mini">${esc(f.ver || '—')}</span>${
+        f.aviso ? `<div class="mini" style="color:var(--warn-ink)">${esc(f.aviso)}</div>` : ''}</td>
+      <td>${f.cand.length ? `<select class="fsel" data-lb="${i}" style="max-width:340px">
+            <option value=""${f.key ? '' : ' selected'}>— no medir esta —</option>
+            ${f.key ? '' : '<!-- sin marcar: el parecido no daba para darlo por hecho -->'}
+            ${f.cand.map(c => `<option value="${esc(c.k)}"${c.k === f.key ? ' selected' : ''}>${
+              esc(truncate(appLabel(c.k), 46))} · ${fmt(c.n)} equipos</option>`).join('')}
+          </select>` : '<span class="mini muted">no aparece en el inventario</span>'}</td>
+      <td class="mini" style="color:var(--ink-4)">${esc(f.key && f.cand[0] ? (f.cand.find(c => c.k === f.key) || {}).por || '' : '')}${
+        (() => { const a = avisoVersionBase(f.key, f.ver);
+                 return a ? `<div style="color:var(--warn-ink);margin-top:3px">${esc(a)}</div>` : ''; })()}</td>
+    </tr>`).join('');
+
+  return sec('Revisar la línea base',
+      `${esc(LB.archivo)} · ${fmt(LB.filas.length)} aplicaciones, ${fmt(casadas)} emparejadas`) +
+    `<div class="banner" style="margin-bottom:14px">${ico('info')}<div>
+      <b>Los nombres no coinciden, y no tienen por qué.</b> La línea base llama a las aplicaciones por el
+      paquete de despliegue —«Netskope 132.0.20.2563»— y el inventario por el nombre del programa
+      —«Netskope Client»—. Esto es lo que propone; revísalo antes de aplicarlo, sobre todo donde haya
+      varios candidatos parecidos.
+    </div></div>
+    <div class="mt-wrap"><div class="mt-scroll"><table class="mt">
+      <thead><tr><th>En la línea base</th><th style="width:130px">Versión</th>
+        <th style="width:360px">Aplicación del inventario</th><th style="width:170px">Por qué</th></tr></thead>
+      <tbody>${filas}</tbody></table></div>
+      <div class="dt-foot"><span><b>${fmt(casadas)}</b> de ${fmt(LB.filas.length)} quedarán en el estándar</span>
+        <button class="btn" data-adm="lb-descartar" style="margin-left:auto">Descartar</button>
+        <button class="btn btn-p" data-adm="lb-aplicar">Aplicar la línea base</button></div></div>`;
+}
+
 function vAdmin(A, rows) {
   const autos = Object.values(CFG.apps).filter(r => r.auto).length;
   const total = Object.keys(CFG.apps).length;
@@ -397,6 +464,21 @@ function vAdmin(A, rows) {
             <span class="hint">Una aplicación presente en al menos este porcentaje del parque se propone como administrada.</span></div>
         </div>
       </div>
+      <div class="card"><div class="card-h"><div><h3>Línea base</h3>
+        <p>La lista de lo que se despliega y su versión aprobada</p></div></div>
+        <div style="margin-top:14px">
+          ${LB.filas.length ? '' : `<p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-3);line-height:1.65">
+            Un Excel o CSV con dos columnas: <b>Aplicación</b> y <b>Versión</b>. Lo que entre queda
+            marcado como <b>administrado</b>, que es lo que lo mete en el cálculo de cumplimiento; el
+            resto del catálogo se sigue inventariando pero no puntúa.</p>`}
+          ${CFG.lineaBase && CFG.lineaBase.length && !LB.filas.length ? `<div class="banner" style="margin:0 0 12px">${ico('shield')}<div>
+            <b>Hay una línea base aplicada: ${fmt(CFG.lineaBase.length)} aplicaciones.</b>
+            Se vuelve a aplicar sola cada vez que cargas un inventario nuevo.
+            <button class="btn" data-adm="lb-quitar" style="margin-top:10px">Quitar la línea base</button>
+          </div></div>` : ''}
+          <button class="btn btn-p" data-adm="lb-cargar">${LB.filas.length ? 'Cargar otro archivo' : 'Cargar línea base'}</button>
+        </div>
+      </div>
       <div class="card"><div class="card-h"><div><h3>Acciones sobre el catálogo</h3>
         <p>Operaciones en bloque para no editar fila por fila</p></div></div>
         <div class="stack" style="margin-top:14px;gap:10px">
@@ -428,6 +510,7 @@ function vAdmin(A, rows) {
         </div>
       </div>
     </div>` +
+    (LB.filas.length ? seccionLineaBase() : '') +
     sec('Estándar por aplicación', 'Versión aprobada, versión mínima, criticidad y permisos. Edita directamente en la tabla.') +
     mtable({ id:'adm', title:'Catálogo de estándares',
       sub:'Los cambios se guardan al salir de cada campo',

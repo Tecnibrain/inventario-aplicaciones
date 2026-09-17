@@ -544,6 +544,7 @@ body.mode-cliente .shell{grid-template-columns:minmax(0,1fr)}
     </div>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xltx,.csv,.tsv,.txt,.parquet" multiple hidden>
     <input type="file" id="cfgFile" accept=".json,application/json" hidden>
+    <input type="file" id="lbFile" accept=".xlsx,.xlsm,.csv,.tsv,.txt" hidden>
     <p class="mini" style="margin:14px auto 0;max-width:470px;color:var(--ink-4)">
       ¿No tienes todavía el archivo? <b>Descargar el script</b> te da un
       <code>inventario.ps1</code> que pide el informe a Intune, espera a que se genere y lo
@@ -2717,6 +2718,7 @@ async function importarGrande(file, opts, onProg) {
   M.aggFull = aggregate(M.rows);
   M.effVer = effVersions(M.rows);
   seedCatalog();
+  reaplicaLineaBase();
   histSnapshot();
   aviso(1, filas, 'Listo');
 
@@ -2959,6 +2961,7 @@ async function importarParquet(file, opts, onProg) {
   M.aggFull = aggregate(M.rows);
   M.effVer = effVersions(M.rows);
   seedCatalog();
+  reaplicaLineaBase();
   histSnapshot();
   aviso(1, filas, 'Listo');
 
@@ -3896,6 +3899,119 @@ function seedCatalog() {
 }
 
 /* ============================================================================
+   9b. LINEA BASE  ·  que se mide, y contra que version
+   ---------------------------------------------------------------------------
+   El archivo de linea base no es un inventario: es el estandar. Trae la lista
+   de aplicaciones que la organizacion despliega y la version aprobada de cada
+   una, y eso es justo lo que decide que entra en el calculo de cumplimiento.
+
+   Sus nombres no son los del inventario y no tienen por que serlo: la linea
+   base los llama por el paquete de despliegue -«Netskope 132.0.20.2563»,
+   «BCO_CORTEX_LB_UPD»- y el inventario por el nombre del programa -«Netskope
+   Client», «Cortex XDR»-. Se proponen candidatos y decide una persona: acertar
+   del todo a maquina no se puede, y equivocarse en silencio seria peor.
+   ========================================================================== */
+/* Lo que en un nombre de paquete no identifica al producto. */
+const LB_RUIDO = new Set(['bco', 'lb', 'upd', 'ver', 'cliente', 'client', 'admin',
+  'x64', 'x86', 'win', 'windows', 'setup', 'install', 'update',
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
+  'septiembre', 'octubre', 'noviembre', 'diciembre']);
+
+const lbPrefijo = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+
+/**
+ * Que aplicaciones del inventario podrian ser esta de la linea base.
+ *
+ * Devuelve las mejores, con el motivo y cuantos equipos la tienen. La cobertura
+ * suma puntos a proposito: la linea base son programas que se despliegan al
+ * parque, asi que entre dos candidatos parecidos el que esta en treinta mil
+ * equipos es casi siempre el bueno y el que esta en siete casi nunca.
+ */
+/**
+ * Si un candidato es lo bastante bueno como para darlo por hecho.
+ *
+ * Con el nombre claro -exacto, o uno de los dos amplia al otro- basta. Si el
+ * nombre solo se parece, hace falta ademas que la aplicacion este desplegada de
+ * verdad: la linea base son programas del parque, asi que un parecido flojo
+ * sobre una aplicacion de dos equipos casi nunca es el bueno. Lo demas se deja
+ * sin marcar, que es mas honesto que acertar a medias.
+ */
+const lbSeguro = c => c && (c.pn >= 70 || (c.pn >= 45 && c.n >= 1000));
+
+function candidatosBase(nombre, catalogo) {
+  const f = formaDe(normApp(nombre));
+  if (!f) return [];
+  const piezas = String(nombre).split(/[^A-Za-z0-9]+/).map(formaDe)
+    .filter(x => x.length >= 4 && !LB_RUIDO.has(x) && !/^\d+$/.test(x));
+  const out = [];
+  for (const c of catalogo) {
+    if (!c.f) continue;
+    let p = 0, por = '';
+    if (c.f === f) { p = 100; por = 'nombre exacto'; }
+    else if (c.f.startsWith(f)) { p = 82 - Math.min(20, (c.f.length - f.length) / 3); por = 'el inventario lo amplía'; }
+    else if (f.startsWith(c.f) && c.f.length >= 4) { p = 74 - Math.min(20, (f.length - c.f.length) / 3); por = 'la línea base lo amplía'; }
+    else {
+      const pre = lbPrefijo(f, c.f);
+      if (pre >= 6 && pre >= Math.min(f.length, c.f.length) * 0.55) { p = 45 + pre; por = 'mismo principio'; }
+      else if (c.f.includes(f) && f.length >= 5) { p = 52; por = 'contenido en el nombre'; }
+      else if (f.includes(c.f) && c.f.length >= 5) { p = 48; por = 'contiene al nombre'; }
+      // Una palabra larga y rara identifica mucho mejor que una corta:
+      // «postscript» o «clearpass» casi no aparecen por casualidad, «core» si.
+      else for (const t of piezas) if (c.f.includes(t)) { p = Math.max(p, 36 + t.length * 1.5); por = 'por la palabra «' + t + '»'; }
+    }
+    // `pn` es lo que dice el NOMBRE y `p` lo que dice el nombre mas la
+    // cobertura. Hacen falta las dos: la cobertura sirve para ordenar, pero
+    // para dar una fila por buena sin preguntar tiene que hablar el nombre.
+    if (p > 0) out.push({ k: c.k, n: c.n, por, pn: p, p: p + Math.min(13, Math.log10(c.n + 1) * 3.2) });
+  }
+  return out.sort((a, b) => b.p - a.p).slice(0, 4);
+}
+
+/** El catalogo en la forma que el emparejador necesita, con equipos de verdad. */
+function catalogoParaBase() {
+  const A = M.aggFull;
+  if (!A || !A.appDev) return [];
+  const reales = M.indice ? M.indice.equiposPorApp() : null;
+  return Array.from(A.appDev.keys()).map(k => ({
+    k, f: formaDe(k.slice(k.indexOf(' / ') + 3)),
+    n: (reales && reales.get(k)) || A.appDev.get(k).size
+  }));
+}
+
+/**
+ * Aplica la linea base al estandar.
+ *
+ * Lo que entra queda marcado como administrado, que es lo que lo mete en el
+ * calculo de cumplimiento, y con `auto` a falso para que el sembrado
+ * automatico no lo pise despues.
+ */
+function aplicaLineaBase(pares) {
+  let n = 0;
+  for (const p of pares) {
+    if (!p.key) continue;
+    const prev = CFG.apps[p.key] || {};
+    CFG.apps[p.key] = Object.assign({}, prev, {
+      rec: p.ver || prev.rec || '',
+      min: prev.min || p.ver || '',
+      gest: true, auto: false,
+      estado: prev.estado || 'permitida',
+      cat: prev.cat || guessCat(p.key)
+    });
+    n++;
+  }
+  CFG.lineaBase = pares.filter(p => p.key).map(p => ({ nombre: p.nombre, ver: p.ver, key: p.key }));
+  cfgSave();
+  REGLAS_V++;
+  return n;
+}
+
+/** Al cargar otro inventario, la linea base se vuelve a aplicar sola. */
+function reaplicaLineaBase() {
+  if (!CFG.lineaBase || !CFG.lineaBase.length) return 0;
+  return aplicaLineaBase(CFG.lineaBase.slice());
+}
+
+/* ============================================================================
    10. MOTOR DE CUMPLIMIENTO
    ========================================================================== */
 const CMP = { rowState: new Uint8Array(0), dev: new Map(), app: new Map(), tot: null, stale: new Set() };
@@ -3918,11 +4034,28 @@ const EST_CLS = { ok: 'ok', warn: 'warn', bad: 'bad', na: 'off' };
  * que el administrador gobierna: las administradas, las criticas y las
  * expresamente no permitidas. Puede ampliarse a todo el catalogo.
  */
+/* Las claves de la linea base, para no rehacer el conjunto en cada fila. Se
+   recalcula cuando la lista cambia, que es lo unico de lo que depende. */
+let LB_SET = null, LB_SET_DE = null;
+function clavesBase() {
+  const lb = CFG.lineaBase;
+  if (!lb || !lb.length) return null;
+  if (LB_SET_DE !== lb) { LB_SET = new Set(lb.map(x => x.key)); LB_SET_DE = lb; }
+  return LB_SET;
+}
+
 function inScope(k) {
   const r = rule(k);
   if (!r) return false;
   if (r.estado === 'no-permitida') return true;
   if (CFG.params.alcance === 'todas') return true;
+  /* Con una linea base cargada, el alcance ES la linea base. Es la lista de lo
+     que la organizacion despliega y mantiene, asi que medir ademas lo que el
+     sembrado automatico adivino -un runtime que esta en el 95 % del parque- la
+     diluye: el indicador deja de hablar de lo que alguien gobierna. Lo marcado
+     a mano como critico sigue contando; lo marcado por la maquina, no. */
+  const base = clavesBase();
+  if (base) return base.has(k) || !!(r.crit && !r.auto);
   return !!(r.gest || r.crit);
 }
 /** Estado de una version concreta frente a su regla. */
@@ -5238,6 +5371,73 @@ function vInforme(A, rows) {
 /* ============================================================================
    23. VISTA · ADMINISTRACION
    ========================================================================== */
+/* Lo cargado del archivo, a la espera de que alguien lo revise. Vive aqui y no
+   en CFG: hasta que no se aplica no es el estandar de nadie. */
+const LB = { filas: [], archivo: '' };
+
+/**
+ * La revision antes de aplicar.
+ *
+ * Se ensena lo que el emparejador propone y por que, con cuantos equipos tiene
+ * cada candidato, y se deja cambiar o descartar fila por fila. El numero de
+ * equipos es lo que mas ayuda a decidir: la linea base son programas que se
+ * despliegan al parque, asi que el candidato de treinta mil equipos casi
+ * siempre es el bueno y el de siete casi nunca.
+ */
+/**
+ * Avisa cuando la version aprobada no se parece a ninguna de las detectadas.
+ *
+ * Pasa cuando los dos lados nombran la version de forma distinta: la linea base
+ * dice «2402» -el nombre del release de Citrix Workspace- y el inventario
+ * reporta «24.2.2000.2031», que es la compilacion. Comparadas como numeros, 2402
+ * queda por encima de 24 y TODO el parque sale atrasado: un 0 % que no es
+ * verdad. Mejor decirlo antes de aplicarlo que dejar que alguien actue sobre el.
+ */
+function avisoVersionBase(key, ver) {
+  if (!ver || !key || !M.aggFull) return '';
+  const vm = M.aggFull.appVerDev.get(key);
+  if (!vm || !vm.size) return '';
+  const cab = String(ver).split('.')[0].replace(/\D/g, '');
+  if (!cab) return '';
+  for (const v of vm.keys()) if (String(v).split('.')[0].replace(/\D/g, '') === cab) return '';
+  const top = Array.from(vm.entries()).sort((a, b) => b[1].size - a[1].size)[0];
+  return 'ninguna detectada empieza por «' + cab + '»; la más común es ' + top[0];
+}
+
+function seccionLineaBase() {
+  const casadas = LB.filas.filter(f => f.key).length;
+  const filas = LB.filas.map((f, i) => `<tr>
+      <td class="name">${esc(f.nombre)}</td>
+      <td><span class="mono mini">${esc(f.ver || '—')}</span>${
+        f.aviso ? `<div class="mini" style="color:var(--warn-ink)">${esc(f.aviso)}</div>` : ''}</td>
+      <td>${f.cand.length ? `<select class="fsel" data-lb="${i}" style="max-width:340px">
+            <option value=""${f.key ? '' : ' selected'}>— no medir esta —</option>
+            ${f.key ? '' : '<!-- sin marcar: el parecido no daba para darlo por hecho -->'}
+            ${f.cand.map(c => `<option value="${esc(c.k)}"${c.k === f.key ? ' selected' : ''}>${
+              esc(truncate(appLabel(c.k), 46))} · ${fmt(c.n)} equipos</option>`).join('')}
+          </select>` : '<span class="mini muted">no aparece en el inventario</span>'}</td>
+      <td class="mini" style="color:var(--ink-4)">${esc(f.key && f.cand[0] ? (f.cand.find(c => c.k === f.key) || {}).por || '' : '')}${
+        (() => { const a = avisoVersionBase(f.key, f.ver);
+                 return a ? `<div style="color:var(--warn-ink);margin-top:3px">${esc(a)}</div>` : ''; })()}</td>
+    </tr>`).join('');
+
+  return sec('Revisar la línea base',
+      `${esc(LB.archivo)} · ${fmt(LB.filas.length)} aplicaciones, ${fmt(casadas)} emparejadas`) +
+    `<div class="banner" style="margin-bottom:14px">${ico('info')}<div>
+      <b>Los nombres no coinciden, y no tienen por qué.</b> La línea base llama a las aplicaciones por el
+      paquete de despliegue —«Netskope 132.0.20.2563»— y el inventario por el nombre del programa
+      —«Netskope Client»—. Esto es lo que propone; revísalo antes de aplicarlo, sobre todo donde haya
+      varios candidatos parecidos.
+    </div></div>
+    <div class="mt-wrap"><div class="mt-scroll"><table class="mt">
+      <thead><tr><th>En la línea base</th><th style="width:130px">Versión</th>
+        <th style="width:360px">Aplicación del inventario</th><th style="width:170px">Por qué</th></tr></thead>
+      <tbody>${filas}</tbody></table></div>
+      <div class="dt-foot"><span><b>${fmt(casadas)}</b> de ${fmt(LB.filas.length)} quedarán en el estándar</span>
+        <button class="btn" data-adm="lb-descartar" style="margin-left:auto">Descartar</button>
+        <button class="btn btn-p" data-adm="lb-aplicar">Aplicar la línea base</button></div></div>`;
+}
+
 function vAdmin(A, rows) {
   const autos = Object.values(CFG.apps).filter(r => r.auto).length;
   const total = Object.keys(CFG.apps).length;
@@ -5296,6 +5496,21 @@ function vAdmin(A, rows) {
             <span class="hint">Una aplicación presente en al menos este porcentaje del parque se propone como administrada.</span></div>
         </div>
       </div>
+      <div class="card"><div class="card-h"><div><h3>Línea base</h3>
+        <p>La lista de lo que se despliega y su versión aprobada</p></div></div>
+        <div style="margin-top:14px">
+          ${LB.filas.length ? '' : `<p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-3);line-height:1.65">
+            Un Excel o CSV con dos columnas: <b>Aplicación</b> y <b>Versión</b>. Lo que entre queda
+            marcado como <b>administrado</b>, que es lo que lo mete en el cálculo de cumplimiento; el
+            resto del catálogo se sigue inventariando pero no puntúa.</p>`}
+          ${CFG.lineaBase && CFG.lineaBase.length && !LB.filas.length ? `<div class="banner" style="margin:0 0 12px">${ico('shield')}<div>
+            <b>Hay una línea base aplicada: ${fmt(CFG.lineaBase.length)} aplicaciones.</b>
+            Se vuelve a aplicar sola cada vez que cargas un inventario nuevo.
+            <button class="btn" data-adm="lb-quitar" style="margin-top:10px">Quitar la línea base</button>
+          </div></div>` : ''}
+          <button class="btn btn-p" data-adm="lb-cargar">${LB.filas.length ? 'Cargar otro archivo' : 'Cargar línea base'}</button>
+        </div>
+      </div>
       <div class="card"><div class="card-h"><div><h3>Acciones sobre el catálogo</h3>
         <p>Operaciones en bloque para no editar fila por fila</p></div></div>
         <div class="stack" style="margin-top:14px;gap:10px">
@@ -5327,6 +5542,7 @@ function vAdmin(A, rows) {
         </div>
       </div>
     </div>` +
+    (LB.filas.length ? seccionLineaBase() : '') +
     sec('Estándar por aplicación', 'Versión aprobada, versión mínima, criticidad y permisos. Edita directamente en la tabla.') +
     mtable({ id:'adm', title:'Catálogo de estándares',
       sub:'Los cambios se guardan al salir de cada campo',
@@ -7266,9 +7482,79 @@ async function gxAction(a) {
   return saveFile('inventario.ps1', scriptIntune(opts, modo), 'text/plain;charset=utf-8');
 }
 
+/**
+ * Lee el archivo de linea base y propone con que aplicacion casa cada fila.
+ *
+ * Es el mismo lector de siempre -Excel o CSV- pero lo que sale NO entra como
+ * fuente de datos: una linea base no es un inventario, es el estandar. Se queda
+ * aparte hasta que alguien revisa los emparejamientos.
+ */
+async function cargarLineaBase(file) {
+  const buf = await file.arrayBuffer();
+  const u8 = new Uint8Array(buf.slice(0, 4));
+  let grid;
+  if (u8[0] === 0x50 && u8[1] === 0x4B) grid = (await readXlsx(buf)).rows;
+  else grid = parseCsv(decodeText(buf));
+  if (!grid || grid.length < 2) throw new Error('El archivo no trae filas por debajo de la cabecera.');
+
+  const cab = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
+  const cols = detectColumns(cab);
+  // Sin cabecera reconocible se usan las dos primeras columnas, que es lo que
+  // trae una linea base a mano: nombre y version.
+  const iApp = cols.app != null ? cols.app : 0;
+  const iVer = cols.ver != null ? cols.ver : 1;
+
+  const catalogo = catalogoParaBase();
+  if (!catalogo.length) throw new Error('Carga primero el inventario: sin catálogo no hay con qué emparejar.');
+
+  const vistas = new Set();
+  LB.filas = [];
+  for (let i = 1; i < grid.length; i++) {
+    const f = grid[i] || [];
+    const nombre = String(f[iApp] == null ? '' : f[iApp]).trim();
+    if (!nombre || vistas.has(nombre)) continue;
+    vistas.add(nombre);
+    // Una version que viene como fecha es que en el Excel la celda tenia
+    // formato de fecha: «45809» se lee como junio de 2025. Eso no es una
+    // version y no puede compararse con ninguna, asi que se deja vacia y se
+    // dice, en vez de meter una fecha donde va un numero de version.
+    const bruto = f[iVer];
+    const fecha = bruto instanceof Date && !isNaN(bruto);
+    const ver = fecha ? '' : String(bruto == null ? '' : bruto).trim();
+    const cand = candidatosBase(nombre, catalogo);
+    LB.filas.push({ nombre, ver, cand, aviso: fecha ? 'la versión venía como fecha' : '',
+                    key: lbSeguro(cand[0]) ? cand[0].k : '' });
+  }
+  LB.archivo = file.name || 'línea base';
+  if (!LB.filas.length) throw new Error('No encontré ninguna aplicación en el archivo.');
+  return LB.filas.length;
+}
+
 /* ---- acciones de administración ---- */
 async function admAction(a) {
   const A = M.aggFull;
+  if (a === 'lb-cargar') {
+    const inp = $('#lbFile');
+    inp.value = '';
+    inp.click();
+    return;
+  }
+  if (a === 'lb-descartar') { LB.filas = []; LB.archivo = ''; render(); return; }
+  if (a === 'lb-aplicar') {
+    const n = aplicaLineaBase(LB.filas);
+    LB.filas = []; LB.archivo = '';
+    toast(`Línea base aplicada: ${fmt(n)} aplicaciones entran en el cumplimiento. ` +
+          `El resto del catálogo se sigue inventariando, pero no puntúa.`);
+    render(); return;
+  }
+  if (a === 'lb-quitar') {
+    if (!confirm('¿Quitar la línea base?\n\nLas aplicaciones dejan de estar marcadas como administradas ' +
+                 'y vuelven a no puntuar, salvo las que hayas marcado a mano.')) return;
+    for (const p of (CFG.lineaBase || [])) { const r = CFG.apps[p.key]; if (r) { r.gest = false; r.auto = true; } }
+    CFG.lineaBase = [];
+    cfgSave(); REGLAS_V++;
+    toast('Línea base retirada'); render(); return;
+  }
   if (a === 'reseed') { const r = seedCatalog(); toast(`Propuestas actualizadas: ${r.nuevas} nuevas, ${r.actualizadas} refrescadas`); render(); return; }
   if (a === 'approve-latest') {
     let n = 0;
@@ -7439,6 +7725,7 @@ async function loadFile(file, añadir) {
     M.aggFull = aggregate(M.rows);
     M.effVer = effVersions(M.rows);
     seedCatalog();
+    reaplicaLineaBase();
     histSnapshot();
     if (!añadir) { S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {}; }
     if (añadir) toast(`Añadido: ${truncate(name, 24)} · ${fmt(src.filas)} filas (${src.shape})`);
@@ -7495,6 +7782,25 @@ function irADatos(ancla) {
   }, 280);
 }
 $('#btnScript').addEventListener('click', () => irADatos('anclaScript'));
+
+/* La revision de la linea base: cambiar a que aplicacion casa una fila. */
+document.addEventListener('change', e => {
+  const s = e.target.closest && e.target.closest('[data-lb]');
+  if (!s) return;
+  const i = +s.getAttribute('data-lb');
+  if (LB.filas[i]) { LB.filas[i].key = s.value; render(); }
+});
+$('#lbFile').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try {
+    const n = await cargarLineaBase(f);
+    toast(`${fmt(n)} aplicaciones leídas. Revisa los emparejamientos antes de aplicar.`);
+    go('admin');
+    setTimeout(() => { const s = $('#lbFile'); const h = document.querySelector('[data-lb]'); if (h) h.scrollIntoView({ block: 'center' }); }, 260);
+  } catch (err) { fail(err && err.message ? err.message : String(err)); }
+});
 
 /* arranque */
 cfgLoad(); histLoad();

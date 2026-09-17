@@ -577,9 +577,79 @@ async function gxAction(a) {
   return saveFile('inventario.ps1', scriptIntune(opts, modo), 'text/plain;charset=utf-8');
 }
 
+/**
+ * Lee el archivo de linea base y propone con que aplicacion casa cada fila.
+ *
+ * Es el mismo lector de siempre -Excel o CSV- pero lo que sale NO entra como
+ * fuente de datos: una linea base no es un inventario, es el estandar. Se queda
+ * aparte hasta que alguien revisa los emparejamientos.
+ */
+async function cargarLineaBase(file) {
+  const buf = await file.arrayBuffer();
+  const u8 = new Uint8Array(buf.slice(0, 4));
+  let grid;
+  if (u8[0] === 0x50 && u8[1] === 0x4B) grid = (await readXlsx(buf)).rows;
+  else grid = parseCsv(decodeText(buf));
+  if (!grid || grid.length < 2) throw new Error('El archivo no trae filas por debajo de la cabecera.');
+
+  const cab = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
+  const cols = detectColumns(cab);
+  // Sin cabecera reconocible se usan las dos primeras columnas, que es lo que
+  // trae una linea base a mano: nombre y version.
+  const iApp = cols.app != null ? cols.app : 0;
+  const iVer = cols.ver != null ? cols.ver : 1;
+
+  const catalogo = catalogoParaBase();
+  if (!catalogo.length) throw new Error('Carga primero el inventario: sin catálogo no hay con qué emparejar.');
+
+  const vistas = new Set();
+  LB.filas = [];
+  for (let i = 1; i < grid.length; i++) {
+    const f = grid[i] || [];
+    const nombre = String(f[iApp] == null ? '' : f[iApp]).trim();
+    if (!nombre || vistas.has(nombre)) continue;
+    vistas.add(nombre);
+    // Una version que viene como fecha es que en el Excel la celda tenia
+    // formato de fecha: «45809» se lee como junio de 2025. Eso no es una
+    // version y no puede compararse con ninguna, asi que se deja vacia y se
+    // dice, en vez de meter una fecha donde va un numero de version.
+    const bruto = f[iVer];
+    const fecha = bruto instanceof Date && !isNaN(bruto);
+    const ver = fecha ? '' : String(bruto == null ? '' : bruto).trim();
+    const cand = candidatosBase(nombre, catalogo);
+    LB.filas.push({ nombre, ver, cand, aviso: fecha ? 'la versión venía como fecha' : '',
+                    key: lbSeguro(cand[0]) ? cand[0].k : '' });
+  }
+  LB.archivo = file.name || 'línea base';
+  if (!LB.filas.length) throw new Error('No encontré ninguna aplicación en el archivo.');
+  return LB.filas.length;
+}
+
 /* ---- acciones de administración ---- */
 async function admAction(a) {
   const A = M.aggFull;
+  if (a === 'lb-cargar') {
+    const inp = $('#lbFile');
+    inp.value = '';
+    inp.click();
+    return;
+  }
+  if (a === 'lb-descartar') { LB.filas = []; LB.archivo = ''; render(); return; }
+  if (a === 'lb-aplicar') {
+    const n = aplicaLineaBase(LB.filas);
+    LB.filas = []; LB.archivo = '';
+    toast(`Línea base aplicada: ${fmt(n)} aplicaciones entran en el cumplimiento. ` +
+          `El resto del catálogo se sigue inventariando, pero no puntúa.`);
+    render(); return;
+  }
+  if (a === 'lb-quitar') {
+    if (!confirm('¿Quitar la línea base?\n\nLas aplicaciones dejan de estar marcadas como administradas ' +
+                 'y vuelven a no puntuar, salvo las que hayas marcado a mano.')) return;
+    for (const p of (CFG.lineaBase || [])) { const r = CFG.apps[p.key]; if (r) { r.gest = false; r.auto = true; } }
+    CFG.lineaBase = [];
+    cfgSave(); REGLAS_V++;
+    toast('Línea base retirada'); render(); return;
+  }
   if (a === 'reseed') { const r = seedCatalog(); toast(`Propuestas actualizadas: ${r.nuevas} nuevas, ${r.actualizadas} refrescadas`); render(); return; }
   if (a === 'approve-latest') {
     let n = 0;
@@ -750,6 +820,7 @@ async function loadFile(file, añadir) {
     M.aggFull = aggregate(M.rows);
     M.effVer = effVersions(M.rows);
     seedCatalog();
+    reaplicaLineaBase();
     histSnapshot();
     if (!añadir) { S.f = {}; S.q = ''; S.qt = {}; S.limit = {}; S.sort = {}; }
     if (añadir) toast(`Añadido: ${truncate(name, 24)} · ${fmt(src.filas)} filas (${src.shape})`);
@@ -806,6 +877,25 @@ function irADatos(ancla) {
   }, 280);
 }
 $('#btnScript').addEventListener('click', () => irADatos('anclaScript'));
+
+/* La revision de la linea base: cambiar a que aplicacion casa una fila. */
+document.addEventListener('change', e => {
+  const s = e.target.closest && e.target.closest('[data-lb]');
+  if (!s) return;
+  const i = +s.getAttribute('data-lb');
+  if (LB.filas[i]) { LB.filas[i].key = s.value; render(); }
+});
+$('#lbFile').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try {
+    const n = await cargarLineaBase(f);
+    toast(`${fmt(n)} aplicaciones leídas. Revisa los emparejamientos antes de aplicar.`);
+    go('admin');
+    setTimeout(() => { const s = $('#lbFile'); const h = document.querySelector('[data-lb]'); if (h) h.scrollIntoView({ block: 'center' }); }, 260);
+  } catch (err) { fail(err && err.message ? err.message : String(err)); }
+});
 
 /* arranque */
 cfgLoad(); histLoad();
