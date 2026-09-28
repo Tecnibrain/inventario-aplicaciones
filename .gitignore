@@ -41,4 +41,21 @@ _tmp*
 # El refresh token de HP, cifrado con DPAPI. Solo lo puede leer el usuario que
 # lo genero, pero no tiene por que estar aqui de ninguna forma.
 .hp-token
+
+# Los scripts de extraccion se quedan fuera porque acaban llevando dentro el
+# tenant, el client id y a veces el secret: se descargan ya rellenos desde la
+# propia pagina, y el repositorio guarda el generador, no el resultado.
 *.ps1
+
+# Los de remediacion son la excepcion, y por eso son la excepcion: no hablan
+# con Graph, no piden credenciales y no llevan ninguna. Son plantillas, y su
+# LEEME no sirve de nada si documenta cuatro archivos que no estan.
+# Lo que SI sale de ellos -las rutas reales del parque- se ignora abajo.
+!remediacion/*.ps1
+
+# Salida del paso 1 de remediacion: lleva rutas de instalacion y nombres
+# de programas de una maquina real del parque.
+objetivos.txt
+remediacion/salida/
+*.bak
+.claude/
