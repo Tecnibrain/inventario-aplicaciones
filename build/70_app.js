@@ -17,7 +17,7 @@ function renderNav(A) {
   $('#nav').innerHTML =
     `<div class="nav-grp">Panel</div>` + ['resumen','base','cumplimiento'].map(item).join('') +
     `<div class="nav-grp">Inventario</div>` + ['aplicaciones','equipos','versiones','mapas'].map(item).join('') +
-    `<div class="nav-grp">Gestión</div>` + ['datos','tendencias','informe','admin'].map(item).join('');
+    `<div class="nav-grp">Gestión</div>` + ['consulta','datos','tendencias','informe','admin'].map(item).join('');
 }
 
 function fsel(dim, label, entries) {
@@ -439,6 +439,7 @@ document.addEventListener('click', async e => {
     return;
   }
   if ((el = cl('[data-gx]'))) { await gxAction(el.getAttribute('data-gx')); return; }
+  if ((el = cl('[data-cd],[data-cm],[data-ce],[data-cx]'))) { if (consultaAction(el)) return; }
   if ((el = cl('[data-adm]'))) { await admAction(el.getAttribute('data-adm')); return; }
   if ((el = cl('[data-load]'))) {
     const modo = el.getAttribute('data-load');

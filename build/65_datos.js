@@ -644,7 +644,8 @@ function GraphGet { param($Uri)
 
 param(
     [string]$Duck = '',
-    [switch]$Conservar
+    [switch]$Conservar,
+    [switch]$Completo
 )
 
 $ErrorActionPreference = 'Stop'
@@ -804,12 +805,46 @@ function Barra { param([string]$P) return $P.Replace([char]92, '/') }
 $Parquet = Join-Path $Salida 'detalle.parquet'
 $patron  = Barra (Join-Path $Salida 'detalle*.csv')
 
+# Las columnas de identificador son GUIDs: 38 bytes por fila, iguales para
+# siempre, repetidos millones de veces. En un export de 4,5 millones de filas
+# DeviceId solo ya son 146 MB de los 306 del archivo, y el tablero no lo usa
+# -agrupa por DeviceName-. Quitando las cuatro, el archivo baja a menos de un
+# tercio, y como el 80 % del tiempo de carga es descomprimir, baja la espera
+# de cada vez que lo abres.
+#
+# Se quitan por nombre y solo si estan: si Intune cambia el informe, lo que no
+# reconozca pasa igual. Con -Completo no se quita nada.
+$Sobra = @('DeviceId', 'UserId', 'ApplicationId', 'ApplicationKey')
+
+$cab = @()
+try {
+    $linea = Get-Content -LiteralPath $Detalle[0].FullName -TotalCount 1
+    if ($linea) {
+        $cab = @(($linea -split ',') | ForEach-Object { $_.Trim([char[]]@('"', ' ', [char]0xFEFF)) } |
+                 Where-Object { $_ })
+    }
+} catch { }
+
+$sel = '*'
+$quitadas = @()
+if (-not $Completo -and $cab.Count -gt 1) {
+    $quitadas = @($cab | Where-Object { $Sobra -contains $_ })
+    $quedan   = @($cab | Where-Object { $Sobra -notcontains $_ })
+    if ($quitadas.Count -and $quedan.Count) {
+        $sel = ($quedan | ForEach-Object { '"' + $_.Replace('"', '""') + '"' }) -join ', '
+    }
+}
+
 # Un informe grande viene partido en varios CSV, y no tienen por que traer las
 # columnas en el mismo orden: por eso union_by_name, que las casa por nombre en
 # vez de por posicion.
+#
+# La compresion es snappy y tiene que seguir siendolo: el lector del tablero no
+# lleva descompresor de zstd ni de gzip. Un parquet en zstd seria mas pequeno y
+# el tablero no lo abriria.
 $sql = @"
 SET preserve_insertion_order = false;
-COPY (SELECT * FROM read_csv_auto('$patron', SAMPLE_SIZE=-1, ignore_errors=true, union_by_name=true))
+COPY (SELECT $sel FROM read_csv_auto('$patron', SAMPLE_SIZE=-1, ignore_errors=true, union_by_name=true))
   TO '$(Barra $Parquet)' (FORMAT parquet, COMPRESSION snappy);
 "@
 
@@ -834,6 +869,11 @@ if (-not $Conservar) {
 Write-Host ''
 Write-Host ("Listo en {0:n1} s" -f $reloj.Elapsed.TotalSeconds) -ForegroundColor Green
 Write-Host ("  {0,10:n1} MB de CSV  ->  {1:n1} MB en Parquet  ({2:n0}x mas pequeno)" -f $mbCsv, $mbPq, ($mbCsv / [Math]::Max(0.01, $mbPq))) -ForegroundColor Green
+if ($quitadas.Count) {
+    Write-Host ("  Fuera {0} columnas de identificador que el tablero no usa: {1}" -f
+        $quitadas.Count, ($quitadas -join ', ')) -ForegroundColor DarkGray
+    Write-Host '  (con -Completo se quedan)' -ForegroundColor DarkGray
+}
 Write-Host ''
 Write-Host 'Un archivo, y es el unico que necesitas:' -ForegroundColor Cyan
 Write-Host ("  {0}" -f $Parquet) -ForegroundColor Cyan

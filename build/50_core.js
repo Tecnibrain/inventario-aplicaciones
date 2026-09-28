@@ -152,7 +152,7 @@ function filterRows(exceptDim) {
 }
 
 /* ---- rutas: el hash permite volver atrás desde un detalle ---- */
-const VIEW_IDS = ['resumen','cumplimiento','aplicaciones','equipos','versiones','tendencias','mapas','datos','informe','admin'];
+const VIEW_IDS = ['resumen','base','cumplimiento','aplicaciones','equipos','versiones','tendencias','mapas','consulta','datos','informe','admin'];
 function go(view, sel) {
   S.view = view;
   S.sel = { app: null, device: null };

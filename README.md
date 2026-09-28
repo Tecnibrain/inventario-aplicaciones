@@ -19,6 +19,21 @@ nunca el inventario.
 3. La aplicación detecta las columnas sola y propone un estándar por aplicación.
 4. Ajusta ese estándar en **Administración** y el resto del tablero se recalcula.
 
+### Cuando la pregunta no está en ninguna pantalla
+
+Las vistas responden preguntas decididas de antemano. Para el resto está **Consulta libre**:
+eliges por qué agrupar —hasta cuatro cosas a la vez: aplicación, versión, equipo, usuario,
+versión de Windows, categoría, cumplimiento— y qué medir —instalaciones, equipos distintos,
+aplicaciones, cumplen, no cumplen, % al día—, y sale la tabla. De ahí se baja en Excel o CSV.
+
+La exportación lleva **el resultado entero**, no las filas que se ven en pantalla. El libro
+de Excel incluye una segunda hoja con la consulta que lo generó: qué se agrupó, qué se midió
+y qué filtros estaban puestos, para que el archivo se explique solo dentro de seis meses.
+
+Las dimensiones que tus datos no traen salen en gris y no se pueden pulsar: un informe de
+Intune no incluye área, cliente ni ubicación, y agrupar por algo que no existe daría una
+tabla de una fila en blanco.
+
 ### Columnas que reconoce
 
 Se detectan por nombre, en español o inglés, en cualquier orden:
