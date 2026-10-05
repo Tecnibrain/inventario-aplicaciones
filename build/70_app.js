@@ -439,6 +439,7 @@ document.addEventListener('click', async e => {
     return;
   }
   if ((el = cl('[data-gx]'))) { await gxAction(el.getAttribute('data-gx')); return; }
+  if ((el = cl('[data-mtx]'))) { await exportaTabla(el.getAttribute('data-mtx')); return; }
   if ((el = cl('[data-cd],[data-cm],[data-ce],[data-cx]'))) { if (consultaAction(el)) return; }
   if ((el = cl('[data-adm]'))) { await admAction(el.getAttribute('data-adm')); return; }
   if ((el = cl('[data-load]'))) {
@@ -557,6 +558,64 @@ async function doExport(kind) {
   toast('Generando el libro de Excel…');
   const blob = await makeXlsx(sheets);
   return saveFile(baseName() + '_informe.xlsx', blob);
+}
+
+/* ============================================================================
+   25b. BAJARSE UNA TABLA
+   ---------------------------------------------------------------------------
+   Cualquier tabla del tablero, tal y como esta: con su filtro de tabla puesto,
+   con su orden, y entera -no las sesenta filas que caben en pantalla-.
+
+   Esto existe porque la pregunta mas repetida no tiene pantalla propia y nunca
+   la va a tener: «dame los equipos que tienen tal cosa». Verla se podia; en la
+   ficha de cada aplicacion esta la lista completa. Sacarla, no.
+   ========================================================================== */
+
+/* Las columnas de estado guardan el codigo -'ok', 'bad'- y ensenan el semaforo.
+   En una hoja de calculo el codigo no dice nada, asi que se traduce. */
+const MT_EST = { estado: 1, est: 1, cumpl: 1 };
+
+function celdaExp(r, c) {
+  if (c.exp) return c.exp(r);
+  const v = r[c.k];
+  if (v == null) return '';
+  if (v instanceof Date) return v.toLocaleString('es-CO');
+  if (MT_EST[c.k] && typeof v === 'string' && EST_LAB[v]) return EST_LAB[v];
+  return v;
+}
+
+async function exportaTabla(id) {
+  const t = MT_DATOS[id];
+  if (!t || !t.data || !t.data.length) { toast('Esa tabla no tiene filas que exportar'); return; }
+
+  const filas = [t.cols.map(c => c.l)];
+  for (const r of t.data) filas.push(t.cols.map(c => celdaExp(r, c)));
+
+  // La hoja de contexto no es adorno: una lista de equipos sin decir de que
+  // aplicacion es, con que filtros y de que dia, dentro de un mes no se puede
+  // usar para nada. El titulo de la tabla y el filtro puesto lo dicen.
+  const ctx = [['Tabla', t.title + (S.sel.app ? ' · ' + appLabel(S.sel.app)
+                                   : S.sel.device ? ' · ' + S.sel.device : '')],
+    ['Vista', (VIEWS[S.view] || {}).l || S.view]];
+  if (t.sub) ctx.push(['Nota', String(t.sub).replace(/<[^>]*>/g, '')]);
+  ctx.push(['Filtros activos', activeDims().map(d => DIMS[d] + ': ' + Array.from(S.f[d]).join(', ')).join(' | ') || 'ninguno'],
+    ['Búsqueda global', S.q || 'ninguna'],
+    ['Filtro de la tabla', S.qt[id] || 'ninguno'],
+    ['Archivo', M.fileName || ''],
+    ['Generado', new Date().toLocaleString('es-CO')],
+    ['Filas', t.data.length]);
+
+  const limpia = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  // El nombre dice de que es: «equipos-afectados» a secas no distingue una
+  // aplicacion de otra cuando hay cinco archivos en la carpeta de descargas.
+  const quien = S.sel.app ? appLabel(S.sel.app) : S.sel.device || '';
+  const nombre = (limpia(t.title) + (quien ? '_' + limpia(quien).slice(0, 40) : '') +
+                  '_' + new Date().toISOString().slice(0, 10)).slice(0, 90);
+
+  toast(`Generando el Excel con ${fmt(t.data.length)} filas…`);
+  const blob = await makeXlsx([{ name: 'Datos', rows: filas }, { name: 'De dónde sale', rows: ctx }]);
+  return saveFile(nombre + '.xlsx', blob);
 }
 
 /* ---- acciones de la conexión con Defender ---- */

@@ -46,7 +46,11 @@ function sec(t, p) {
   return `<div class="sec"><h2>${t}</h2>${p ? `<p>${p}</p>` : ''}<span class="sec-line"></span></div>`;
 }
 
-/* ---- tabla maestra reutilizable: ordena, busca y pagina ---- */
+/* Lo ultimo que dibujo cada tabla, para poder exportarlo. Vive fuera de la
+   funcion porque quien exporta es el manejador del clic, que corre despues. */
+const MT_DATOS = {};
+
+/* ---- tabla maestra reutilizable: ordena, busca, pagina y se deja exportar ---- */
 function mtable(o) {
   const id = o.id, st = sortOf(id, o.sort || { k: o.cols[1] ? o.cols[1].k : o.cols[0].k, d: -1 });
   const q = (S.qt[id] || '').trim().toLowerCase();
@@ -59,6 +63,11 @@ function mtable(o) {
     if (typeof x === 'number' && typeof y === 'number') return (x - y) * st.d;
     return String(x == null ? '' : x).localeCompare(String(y == null ? '' : y), 'es') * st.d;
   });
+  // Lo que se ve son sesenta filas; lo que se ha pedido son todas. Se guarda
+  // aqui la tabla ya filtrada y ordenada -antes de recortarla- para que el
+  // boton de exportar se lleve la respuesta entera y no la primera pantalla.
+  MT_DATOS[id] = { title: o.title, sub: o.sub || '', data, cols: o.cols };
+
   const lim = limitOf(id), shown = data.slice(0, lim);
   const th = o.cols.map(c => `<th data-sort="${id}|${c.k}" class="${c.n ? 'n ' : ''}${st.k === c.k ? 'on' : ''}"` +
     `${c.w ? ` style="width:${c.w}"` : ''}>${esc(c.l)}<span>${st.k === c.k ? (st.d > 0 ? '▲' : '▼') : '↕'}</span></th>`).join('');
@@ -68,7 +77,9 @@ function mtable(o) {
   return `<div class="mt-wrap">
     <div class="mt-bar"><h3>${o.title}</h3>${o.sub ? `<span class="mini">${o.sub}</span>` : ''}
       ${o.tools || ''}
-      <div class="fsearch" style="margin-left:auto;max-width:250px">
+      ${o.exportar === false ? '' : `<button class="btn mt-exp" data-mtx="${id}"` +
+        ` title="Bajar esta tabla entera a Excel, no solo las filas que se ven">${ico('file')}Excel</button>`}
+      <div class="fsearch">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         <input type="search" data-q="${id}" value="${esc(S.qt[id] || '')}" placeholder="Filtrar…" aria-label="Filtrar tabla">
       </div>

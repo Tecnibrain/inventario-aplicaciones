@@ -431,6 +431,9 @@ function vConsulta(A, rows) {
     mtable({
       id: 'consulta', title: 'Resultado', data: muestra, cols,
       sort: { k: clave, d: -1 },
+      // Aqui no vale el boton generico: solo conoce las 5.000 filas que se
+      // dibujan, y lo que se pide al exportar una consulta es el resultado.
+      exportar: false,
       tools: `<button class="btn btn-p" data-cx="xlsx">Excel</button>` +
              `<button class="btn" data-cx="csv">CSV</button>`,
       foot: `<span style="margin-left:auto;color:var(--ink-4)">` +

@@ -206,3 +206,11 @@ table.mt select.cell{background:var(--surface-2);border:1px solid var(--line);bo
   .cq-grp{border-right:0;margin-right:0}}
 .cq-chip.off{opacity:.34;border-style:dashed;cursor:not-allowed}
 .cq-chip.off:hover{border-color:var(--line);color:var(--ink-3);background:var(--surface-2)}
+
+/* El boton de bajarse la tabla, y el buscador, a la derecha de la barra.
+   El margen automatico lo lleva SOLO el primero de los dos: puesto en los dos
+   se reparten el hueco y quedan separados por media barra. Y el buscador
+   crece -flex:1 1 230px- asi que sin esto empujaba al boton fuera del marco. */
+.mt-bar .mt-exp{padding:6px 12px;font-size:11.5px;flex:none;margin-left:auto}
+.mt-bar .fsearch{margin-left:auto;max-width:250px}
+.mt-bar .mt-exp~.fsearch{margin-left:10px}

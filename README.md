@@ -19,6 +19,17 @@ nunca el inventario.
 3. La aplicación detecta las columnas sola y propone un estándar por aplicación.
 4. Ajusta ese estándar en **Administración** y el resto del tablero se recalcula.
 
+### Bajarse cualquier tabla
+
+Toda tabla del tablero lleva un botón **Excel** a la derecha de su buscador. Se lleva la tabla
+**entera** —no las 60 filas que caben en pantalla— con el filtro de tabla y el orden que
+tengas puestos, y añade una segunda hoja diciendo de dónde salió: qué tabla, de qué
+aplicación o equipo, con qué filtros y de qué día.
+
+El caso que más se usa: **Aplicaciones → una aplicación → Equipos con esta aplicación →
+Excel** da la lista completa de máquinas que la tienen, con usuario, versión instalada,
+versión de Windows y estado de cumplimiento.
+
 ### Cuando la pregunta no está en ninguna pantalla
 
 Las vistas responden preguntas decididas de antemano. Para el resto está **Consulta libre**:
