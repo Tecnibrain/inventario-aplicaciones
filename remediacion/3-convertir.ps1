@@ -95,6 +95,7 @@ $Windows = @{
     'Parche instalado'       = $true
     'Parche anterior'        = $true
     'Upgrade de Windows'     = $true
+    'Windows instalado'      = $true
     'Windows anterior'       = $true
     'Compilacion de Windows' = $true
 }
@@ -207,7 +208,7 @@ function Fecha-De([string]$s) {
 # acaba pasando: el script lo retoca otra persona y nadie avisa.
 function Parse-Win([string]$linea) {
     if (-not $linea) { return $null }
-    $r = @{ Comp = ''; Rel = ''; Upg = ''; Antes = ''; Kbs = @() }
+    $r = @{ Comp = ''; Rel = ''; Upg = ''; Inst = ''; Antes = ''; Kbs = @() }
 
     # La compilacion con su UBR: 26100.6899. Los ultimos digitos son el parche.
     $m = [regex]::Match($linea, '(?i)\bbuild\s+(\d{4,6})\.(\d+)')
@@ -219,23 +220,29 @@ function Parse-Win([string]$linea) {
     $m = [regex]::Match($linea, '\b(2[0-9]H[12])\b')
     if ($m.Success) { $r.Rel = $m.Groups[1].Value }
 
-    # Upgrade de version. La fecha se busca dentro del tramo del upgrade -de ahi
-    # el [^|]- para no acabar cogiendo la fecha de un KB.
+    # Upgrade de version: si lo hubo, y desde donde.
+    #
+    # La fecha del tramo es la misma cosa en los dos casos -el dia en que se
+    # instalo el Windows que hay ahora- se llame "upgrade el 2026-03-10" o
+    # "instalacion limpia 2026-07-28". Asi que sale a su propio campo y el del
+    # upgrade se queda con un si o un no. Se busca dentro del tramo -de ahi el
+    # [^|]- para no acabar cogiendo la fecha de un KB.
     $m = [regex]::Match($linea, '(?i)upgrade[^a-z0-9]{0,4}([a-z]+)')
     if ($m.Success) {
         $tok = $m.Groups[1].Value.ToLowerInvariant()
+        # Secos a proposito: estos valores acaban siendo la "version" de una
+        # aplicacion en el catalogo del tablero, y ahi una frase estorba.
         if ($tok.StartsWith('s') -or $tok.StartsWith('y')) {
-            $f = [regex]::Match($linea, '(?i)upgrade[^|]*?(\d{4}-\d{2}-\d{2})')
-            if ($f.Success) { $r.Upg = $f.Groups[1].Value } else { $r.Upg = 'Si' }
+            $r.Upg = 'Si'
             $d = [regex]::Match($linea, '(?i)\b(?:desde|from)\s+([^)|;]+)')
             if ($d.Success) {
                 $r.Antes = ($d.Groups[1].Value.Trim() -replace '(?i)\s+build\s+', ' ')
             }
         } elseif ($tok.StartsWith('n')) {
-            # Seco a proposito: este valor acaba siendo la "version" de una
-            # aplicacion en el catalogo del tablero, y ahi una frase estorba.
             $r.Upg = 'No'
         }
+        $f = [regex]::Match($linea, '(?i)upgrade[^|]*?(\d{4}-\d{2}-\d{2})')
+        if ($f.Success) { $r.Inst = $f.Groups[1].Value }
     }
 
     # Los KB, con la fecha que venga pegada detras.
@@ -270,16 +277,29 @@ $cab = $filas[0].PSObject.Properties.Name
 
 $cEquipo = Columna-Por $cab @('devicename', 'nombrededispositivo', 'nombredispositivo', 'equipo') `
                             @('devicename', 'device', 'dispositivo', 'equipo', 'hostname') @('id')
-# Ojo con la consola en espanol: Norma() tira todo lo que no sea a-z0-9, y la
-# tilde de "deteccion" se va con ella. "Salida de deteccion previa a la
+# Dos trampas en la cabecera real de Intune.
+#
+# Una: junto a PreRemediationDetectionScriptOutput viaja
+# PreRemediationDetectionScriptError, va ANTES en el archivo y tambien contiene
+# "preremediationdetection". Se llevaba el puesto y todos los equipos salian sin
+# carga. De ahi el nombre exacto primero y el "error" en la lista de excluidos.
+#
+# Y otra, con la consola en espanol: Norma() tira todo lo que no sea a-z0-9, y
+# la tilde de "deteccion" se va con ella. "Salida de deteccion previa a la
 # correccion" acaba siendo 'salidadedeteccinpreviaalacorreccin', con la i sola.
-$cCarga  = Columna-Por $cab @() `
+$cCarga  = Columna-Por $cab @('preremediationdetectionscriptoutput',
+                              'predetectionscriptoutput') `
                             @('preremediationdetection', 'detectionoutput', 'preremediation',
                               'salidadedeteccin', 'salidadedeteccion', 'deteccinprevia',
-                              'deteccionprevia', 'output', 'salida') @()
+                              'deteccionprevia', 'output', 'salida') @('error')
 $cUsr    = Columna-Por $cab @('username', 'upn', 'usuario') @('user', 'upn', 'usuario') @('id')
-$cFecha  = Columna-Por $cab @() @('lastrun', 'lastsync', 'date', 'fecha', 'time', 'hora',
-                                  'ejecucin', 'ejecucion', 'sincronizacin', 'sincronizacion') @()
+# Aqui la trampa es "Last run message", que contiene 'lastrun' y no es una fecha
+# sino un texto. Por eso van primero los nombres exactos y se excluye lo que
+# sabemos que no es una fecha aunque lo parezca.
+$cFecha  = Columna-Por $cab @('modifiedtime', 'lastsynctime', 'lastruntime') `
+                            @('lastrun', 'lastsync', 'date', 'fecha', 'time', 'hora',
+                              'ejecucin', 'ejecucion', 'sincronizacin', 'sincronizacion') `
+                            @('message', 'mensaje', 'error', 'next', 'proxima', 'agent')
 
 if (-not $cEquipo) { throw ("No reconozco la columna del equipo. Cabeceras: " + ($cab -join ', ')) }
 if (-not $cCarga)  { throw ("No reconozco la columna de la salida del script. Cabeceras: " + ($cab -join ', ')) }
@@ -409,6 +429,7 @@ try {
                 }
             }
             Escribe $eq 'Upgrade de Windows' $w.Upg $d.Usr $fecha $comp
+            Escribe $eq 'Windows instalado' $w.Inst $d.Usr $fecha $comp
             Escribe $eq 'Windows anterior' $w.Antes $d.Usr $fecha $comp
             # Un equipo que solo reporta compilacion -ni KB ni upgrade- tambien
             # cuenta: sin una fila no entra en el tablero y se perderia su nivel.

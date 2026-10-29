@@ -26,8 +26,15 @@ Aquí hay dos cosas montadas sobre ese mismo vehículo:
 > argumentos y arrastra el resultado: el apartado **Parches** se llena solo.
 >
 > De los KB que vengan, el primero es el **más reciente por fecha**, no el de
-> número más alto. No es lo mismo: KB5132402 se instaló el 28 y KB5127936 el 29,
-> y el número grande es el viejo.
+> número más alto. En un export real de 681 equipos, en **320 de las 618 líneas
+> con varios KB** el número más alto no era el más reciente. Ordenar por número
+> habría acertado a cara o cruz.
+>
+> Dos columnas del export de Intune se parecen demasiado a las que hacen falta y
+> el convertidor las esquiva a propósito: `PreRemediationDetectionScriptError`,
+> que va **antes** que `...Output` y contiene el mismo texto en el nombre, y
+> `Last run message`, que contiene «last run» y no es una fecha sino un texto.
+> Con cualquiera de las dos, el resultado es cero equipos sin un solo error.
 
 ---
 
@@ -118,8 +125,14 @@ no son programas y dejaría de poder navegarse.
 | `Parche de Windows` | `KB5066835` | columna **Último KB** |
 | `Parche instalado` | `2026-10-14` | columnas **Parcheado el** y **Días** |
 | `Parche anterior` | `KB5065426 (2026-09-10)` | no tiene columna: se busca y se agrupa en **Consulta libre** |
-| `Upgrade de Windows` | `2026-03-10` o `No` | columna **Upgrade** y la sección de upgrades |
+| `Upgrade de Windows` | `Si` o `No` | columna **Upgrade** |
+| `Windows instalado` | `2026-07-28` | columna **Instalado el** y el reparto por mes |
 | `Windows anterior` | `23H2 22631.4890` | columna **Venía de** |
+
+La fecha de `Windows instalado` es la misma cosa en los dos casos —el día en que entró el
+Windows que hay puesto— se escriba `Upgrade: SI el 2026-03-10` o
+`Upgrade: NO (instalacion limpia 2026-07-28)`. Por eso va a su propio campo y el del upgrade
+se queda con un sí o un no.
 
 Además va la compilación en su propia columna, `OSVersion`, la misma que trae el inventario.
 Si el equipo reporta una **más alta** que la del inventario, el tablero usa la más alta y lo

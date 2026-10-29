@@ -29,6 +29,7 @@ const PAR_MARCAS = {
   'parche de windows': 'kb',
   'parche instalado': 'fecha',
   'upgrade de windows': 'upg',
+  'windows instalado': 'inst',
   'windows anterior': 'antes',
   'compilacion de windows': 'soloComp',
   'compilación de windows': 'soloComp'
@@ -170,7 +171,7 @@ function calculaParches() {
         dev: d.dev, user: d.f.user || '', rel, comp: '10.0.' + o.base + '.' + d.rev,
         rev: d.rev, atras: pos.get(d.rev), tramo: tramoDe(pos.get(d.rev)),
         kb: r.kb || '', parcheado: r.fecha || '', dias: dias,
-        upg: r.upg || '', antes: r.antes || ''
+        upg: r.upg || '', inst: r.inst || '', antes: r.antes || ''
       });
     }
 
@@ -188,26 +189,35 @@ function calculaParches() {
   conFecha.sort((a, b) => a.dias - b.dias);
   const mediana = conFecha.length ? conFecha[Math.floor(conFecha.length / 2)].dias : null;
 
-  // Los upgrades de version, si la remediacion los trae. Un equipo que llego a
-  // 24H2 por upgrade y otro que nacio en 24H2 tienen el mismo numero delante y
-  // no la misma historia: el primero arrastra la instalacion vieja.
-  const upMes = new Map(), upDesde = new Map();
+  // De donde viene el Windows que hay puesto. Un equipo que llego a 24H2 por
+  // upgrade y otro que nacio en 24H2 tienen el mismo numero delante y no la
+  // misma historia: el primero arrastra la instalacion vieja, y la fecha de
+  // instalacion lo dice.
+  const instMes = new Map(), upDesde = new Map(), edades = [];
   let upSi = 0, upNo = 0;
   for (const r of filas) {
+    if (r.inst) {
+      const m = /^(\d{4})-(\d{2})/.exec(r.inst);
+      if (m) instMes.set(m[1] + '-' + m[2], (instMes.get(m[1] + '-' + m[2]) || 0) + 1);
+      const d = diasDesde(r.inst);
+      if (d != null) edades.push(d);
+    }
     if (!r.upg) continue;
     if (/^no/i.test(r.upg)) { upNo++; continue; }
     upSi++;
-    const m = /^(\d{4})-(\d{2})/.exec(r.upg);
-    if (m) upMes.set(m[1] + '-' + m[2], (upMes.get(m[1] + '-' + m[2]) || 0) + 1);
+    // 1909 y 2004 son nombres de version igual que 23H2, solo que de los
+    // anos en que Windows 10 se numeraba por mes.
     if (r.antes) {
-      const k = (/\b(2[0-9]H[12])\b/.exec(r.antes) || [, r.antes])[1];
+      const k = (/\b(2[0-9]H[12]|1[5-9]0[0-9]|2004)\b/.exec(r.antes) || [, r.antes])[1];
       upDesde.set(k, (upDesde.get(k) || 0) + 1);
     }
   }
+  edades.sort((a, b) => a - b);
+  const edadMed = edades.length ? edades[Math.floor(edades.length / 2)] : null;
 
   return { filas, releases, tramos, sinComp, conFecha: conFecha.length,
            conKb: filas.filter(r => r.kb).length, mediana, masFresca,
-           upSi, upNo, upMes, upDesde };
+           upSi, upNo, instMes, upDesde, edadMed, conInst: edades.length };
 }
 
 /* ---------------------------------------------------------------------------
@@ -304,26 +314,29 @@ function vParches(A, rows) {
   rezago.sort((a, b) => b.n - a.n);
   const top = rezago.slice(0, 12);
 
-  // ---- upgrades de version, solo si alguien los reporta
+  // ---- de donde viene el Windows puesto, solo si alguien lo reporta
   const upTot = P.upSi + P.upNo;
-  const meses = Array.from(P.upMes.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, 18);
+  const meses = Array.from(P.instMes.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, 18);
   const desde = Array.from(P.upDesde.entries()).sort((a, b) => b[1] - a[1]);
-  const upgSec = !upTot ? '' :
-    sec('Upgrades de versión',
-      `${fmt(P.upSi)} de los ${fmt(upTot)} equipos que lo reportan llegaron a su versión ` +
-      `por upgrade; ${fmt(P.upNo)} son instalación limpia`) +
+  const upgSec = !(upTot || P.conInst) ? '' :
+    sec('De dónde viene el Windows que tienen',
+      (upTot ? `${fmt(P.upSi)} de los ${fmt(upTot)} equipos que lo reportan llegaron a su ` +
+               `versión por upgrade y ${fmt(P.upNo)} son instalación limpia` : '') +
+      (P.edadMed != null ? `${upTot ? '; la' : 'La'} mitad lleva más de ` +
+        `<b>${fmt1(P.edadMed / 30.4)} meses</b> con la instalación que tiene` : '')) +
     `<div class="gwide">` +
-      card({ title: 'Cuándo se hizo el upgrade', sub: 'Por mes, del más reciente al más antiguo',
+      card({ title: 'Cuándo se instaló el Windows actual',
+        sub: 'Por mes, del más reciente al más antiguo. Da igual si llegó por upgrade o limpio',
         body: meses.length
           ? barH(meses.map(x => [x[0], x[1], '', '']), { unit: 'Equipos', W: 560, labelW: 120,
-              trunc: 12, rowH: 23, aria: 'Upgrades por mes' })
-          : `<div class="empty" style="padding:22px">Los equipos con upgrade no traen la fecha.</div>`,
+              trunc: 12, rowH: 23, aria: 'Instalaciones por mes' })
+          : `<div class="empty" style="padding:22px">Nadie reporta la fecha de instalación.</div>`,
         table: twin(['Mes', 'Equipos'], meses.map(x => [x[0], fmt(x[1])])) }) +
       card({ title: 'Venían de', sub: 'La versión que tenía el equipo antes del upgrade',
         body: desde.length
           ? barH(desde.map(x => [x[0], x[1], '', '']), { unit: 'Equipos', W: 560, labelW: 150,
               trunc: 18, rowH: 25, aria: 'Version anterior al upgrade' })
-          : `<div class="empty" style="padding:22px">Sin versión anterior reportada.</div>`,
+          : `<div class="empty" style="padding:22px">Ningún equipo llegó por upgrade.</div>`,
         table: twin(['Versión anterior', 'Equipos'], desde.map(x => [x[0], fmt(x[1])])) }) +
     `</div>`;
 
@@ -334,6 +347,7 @@ function vParches(A, rows) {
     { k: 'atras', l: 'Por detrás', n: true },
     { k: 'kb', l: 'Último KB' }, { k: 'parcheado', l: 'Parcheado el' },
     { k: 'dias', l: 'Días', n: true }];
+  if (P.conInst) colsDev.push({ k: 'inst', l: 'Instalado el' });
   if (upTot) colsDev.push({ k: 'upg', l: 'Upgrade' }, { k: 'antes', l: 'Venía de' });
 
   return viewHead('Parches', 'En qué nivel de parche va cada máquina, y cuánto lleva ahí.') +
@@ -376,8 +390,9 @@ function vParches(A, rows) {
       cols: colsDev,
       cell: (x, c) => {
         if (c.k === 'upg') return !x.upg ? '<span class="muted">—</span>'
-          : /^no/i.test(x.upg) ? '<span class="muted">Limpia</span>'
-          : `<span class="mono mini">${esc(x.upg)}</span>`;
+          : /^no/i.test(x.upg) ? '<span class="muted">Limpia</span>' : 'Sí';
+        if (c.k === 'inst') return x.inst
+          ? `<span class="mono mini">${esc(x.inst)}</span>` : '<span class="muted">—</span>';
         if (c.k === 'antes') return x.antes
           ? `<span class="mono mini">${esc(x.antes)}</span>` : '<span class="muted">—</span>';
         if (c.k === 'comp') return `<span class="mono mini">${esc(x.comp)}</span>`;
