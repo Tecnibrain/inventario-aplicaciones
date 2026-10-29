@@ -76,6 +76,14 @@ $Fabricantes = @{
 }
 # <<<FIN FABRICANTES>>>
 
+# Los parches no caben en la tabla de arriba: cada KB es un numero distinto y
+# salen varios nuevos cada mes, asi que se reconocen por la forma del nombre.
+function Fabricante-De([string]$id) {
+    if ($Fabricantes.ContainsKey($id)) { return $Fabricantes[$id] }
+    if ($id -match '^KB\d+$' -or $id -eq 'Parche de Windows') { return 'Microsoft Corporation' }
+    return ''
+}
+
 # ======================================================== EL MOTOR
 
 # Sin argumento, se busca el export mas reciente. Lo normal es acabar de
@@ -263,8 +271,7 @@ try {
             if (-not $id) { continue }
             $ids[$id] = $true
 
-            $fab = ''
-            if ($Fabricantes.ContainsKey($id)) { $fab = $Fabricantes[$id] }
+            $fab = Fabricante-De $id
 
             $sw.WriteLine((Cs $eq) + ',' + (Cs $fab) + ',' + (Cs $id) + ',' +
                           (Cs $ver) + ',' + (Cs $d.Usr) + ',' + (Cs $fecha))
@@ -284,7 +291,8 @@ if ($Listar) {
     Write-Host ''
     Write-Host '  Ids que llegaron, y si tienen fabricante:' -ForegroundColor Cyan
     foreach ($k in ($ids.Keys | Sort-Object)) {
-        $f = if ($Fabricantes.ContainsKey($k)) { $Fabricantes[$k] } else { '(sin fabricante)' }
+        $f = Fabricante-De $k
+        if (-not $f) { $f = '(sin fabricante)' }
         Write-Host ("    {0,-44} {1}" -f $k, $f) -ForegroundColor DarkGray
     }
 }

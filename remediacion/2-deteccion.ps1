@@ -62,6 +62,22 @@ $TopeSalida = 1900
 # la salida queda guardada seguro. Cuesta que el informe se vea todo en rojo.
 $CodigoSalida = 0
 
+# Los ultimos parches instalados, por numero de KB.
+#
+#   0   nada. Es lo normal, y no porque el dato no sirva: la compilacion de
+#       Windows que YA viene en el inventario -"10.0.26100.9445"- son los
+#       ultimos digitos el parche del mes, y eso lo tienes sin pedir nada.
+#   1   el KB mas reciente, como "Parche de Windows=KB5062553". Una sola
+#       aplicacion mas en el tablero, con el KB de version: asi se le puede
+#       poner version aprobada y el cumplimiento de parches sale solo.
+#   N   los N mas recientes, uno por KB y con su fecha de instalacion. Cuidado:
+#       cada KB distinto es una aplicacion distinta en el catalogo, y en un
+#       parque grande son cientos de lineas que no son programas.
+#
+# Lo que esto anade sobre la compilacion: el numero de KB se puede buscar, y
+# cubre lo que no es del sistema operativo -.NET y demas-.
+$Parches = 0
+
 # ============================================================== OBJETIVOS
 #
 # Formas admitidas:
@@ -186,6 +202,51 @@ foreach ($o in $Objetivos) {
     }
 }
 
+# ---------------------------------------------------------------- parches
+# Win32_QuickFixEngineering es lo que hay: rapido y en todas las maquinas. No
+# lo trae TODO -lo que entra por la pila de mantenimiento a veces no aparece-
+# pero para "en que parche va este equipo" sirve, y la compilacion de Windows
+# cubre el hueco.
+if ($Parches -gt 0) {
+    try {
+        $hf = @(Get-CimInstance -ClassName Win32_QuickFixEngineering -ErrorAction Stop |
+                Where-Object { $_.HotFixID -match '^KB\d+$' })
+        # Manda la fecha de instalacion, y el numero de KB solo desempata.
+        # Tentaba ordenar por numero y ahorrarse esto, porque InstalledOn viene
+        # vacio o como texto en bastantes equipos; pero el numero NO va siempre
+        # en orden: en la maquina donde se probo esto, KB5132402 se instalo el
+        # 28 y KB5127936 el 29, y el grande es el viejo. Con el numero a secas
+        # el "ultimo parche" habria salido mal.
+        #
+        # La conversion va aqui, en un bucle con su try, y no dentro del
+        # Sort-Object: un casteo que revienta ahi dentro se lleva por delante
+        # la consulta entera y el equipo reporta vacio sin decir por que.
+        $lista = @()
+        foreach ($h in $hf) {
+            $t = 0
+            if ($h.InstalledOn) { try { $t = ([datetime]$h.InstalledOn).Ticks } catch { $t = 0 } }
+            $lista += New-Object PSObject -Property @{
+                KB = [string]$h.HotFixID
+                Ticks = $t
+                Num = [int]($h.HotFixID -replace '\D', '')
+            }
+        }
+        $hf = @($lista | Sort-Object Ticks, Num -Descending | Select-Object -First $Parches)
+
+        if ($Parches -eq 1 -and $hf.Count) {
+            # Una linea y una aplicacion: el KB de version, listo para que el
+            # tablero lo puntue contra la version aprobada que le pongas.
+            $partes += ('Parche de Windows=' + (Limpia $hf[0].KB))
+        } else {
+            foreach ($h in $hf) {
+                $f = '1'
+                if ($h.Ticks) { $f = (New-Object DateTime($h.Ticks)).ToString('yyyy-MM-dd') }
+                $partes += ((Limpia $h.KB) + '=' + $f)
+            }
+        }
+    } catch { $fallos++ }
+}
+
 $carga = 'LB1;' + $Objetivos.Count + ';' + ($partes -join '~')
 
 # Guardia del tope. Si algun dia la lista crece tanto que no cabe, se corta por
@@ -212,8 +273,14 @@ if ($Prueba) {
         Write-Host ''
         exit 0
     }
+    if ($Parches -gt 0) {
+        $kb = @($partes | Where-Object { $_ -match '^(KB\d+|Parche de Windows)=' })
+        foreach ($p in $kb) { Write-Host ("  [x] {0}" -f $p.Replace('=', '  ')) -ForegroundColor Green }
+        if (-not $kb.Count) { Write-Host '  [ ] parches: no devolvio ninguno' -ForegroundColor DarkYellow }
+    }
     Write-Host ('  {0} de {1} objetivos presentes, {2} con error de lectura' -f
-        $partes.Count, $Objetivos.Count, $fallos) -ForegroundColor Cyan
+        ($partes.Count - $(if ($Parches -gt 0) { @($partes | Where-Object { $_ -match '^(KB\d+|Parche de Windows)=' }).Count } else { 0 })),
+        $Objetivos.Count, $fallos) -ForegroundColor Cyan
     Write-Host ('  Salida: {0} caracteres de {1} de tope' -f $carga.Length, $TopeSalida) -ForegroundColor Cyan
     if ($carga -like '*+CORTADO*') {
         Write-Host '  NO CABE: parte los objetivos en dos remediaciones.' -ForegroundColor Red
