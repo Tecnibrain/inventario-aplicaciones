@@ -9,11 +9,20 @@ Aquí hay dos cosas montadas sobre ese mismo vehículo:
 | | Para qué | Qué hace falta |
 |---|---|---|
 | **Línea base por ruta** | un archivo en una ruta concreta, con su versión, que el inventario de programas instalados no ve | los tres pasos de abajo |
-| **Parches de Windows** | el KB y el día en que entró, que Intune no muestra por ningún lado | **solo el paso 3**, si ya tienes tu remediación |
+| **Parches de Windows** | el KB y el día en que entró, que Intune no muestra por ningún lado | **nada**, si ya tienes tu remediación |
 
-> ### Si ya tienes tu propia remediación de parches
+> ### Si ya tienes tu propia remediación
 >
-> `3-convertir.ps1` la lee sin tocar nada. Reconoce una línea del tipo:
+> **Arrastra el CSV del portal al tablero tal cual.** No hay que convertirlo ni
+> renombrarlo: el tablero reconoce un export de remediación por sus cabeceras,
+> lo desdobla al vuelo y te dice cuántos equipos entraron. 675 equipos tardan
+> una décima de segundo.
+>
+> `3-convertir.ps1` hace exactamente lo mismo desde PowerShell y sigue ahí por
+> si quieres dejar el archivo preparado, archivarlo o cruzarlo con otra cosa.
+> Para la carga normal no hace falta.
+>
+> Lo que se reconoce es una línea del tipo:
 >
 > ```
 > Win 24H2 build 26100.6899 | Upgrade: SI el 2026-03-10 (desde 23H2 build
@@ -22,8 +31,7 @@ Aquí hay dos cosas montadas sobre ese mismo vehículo:
 >
 > Cada dato se saca **por su forma** —el KB parece un KB, la fecha parece una
 > fecha— y no por su posición, así que la redacción puede cambiar y sigue
-> leyéndose. Exporta el CSV del portal, ejecuta `.\3-convertir.ps1` sin
-> argumentos y arrastra el resultado: el apartado **Parches** se llena solo.
+> leyéndose.
 >
 > De los KB que vengan, el primero es el **más reciente por fecha**, no el de
 > número más alto. En un export real de 681 equipos, en **320 de las 618 líneas
@@ -31,7 +39,7 @@ Aquí hay dos cosas montadas sobre ese mismo vehículo:
 > habría acertado a cara o cruz.
 >
 > Dos columnas del export de Intune se parecen demasiado a las que hacen falta y
-> el convertidor las esquiva a propósito: `PreRemediationDetectionScriptError`,
+> las dos vías las esquivan a propósito: `PreRemediationDetectionScriptError`,
 > que va **antes** que `...Output` y contiene el mismo texto en el nombre, y
 > `Last run message`, que contiene «last run» y no es una fecha sino un texto.
 > Con cualquiera de las dos, el resultado es cero equipos sin un solo error.
@@ -77,8 +85,12 @@ Asignar al grupo de equipos. Y ya está: eso es todo el montaje.
 
 ## Lo que haces cada vez que quieras datos frescos
 
-**Dispositivos → Remediaciones → la tuya → Estado del dispositivo → Exportar.**
-Después:
+**Dispositivos → Remediaciones → la tuya → Estado del dispositivo → Exportar**, y
+**arrastra el CSV al tablero**. Ya está. Entra como una fuente más y se funde con
+lo que venga de Intune: lo que aparezca por los dos lados no se cuenta dos veces.
+
+Si prefieres dejar el archivo preparado —para archivarlo, o para cruzarlo con
+otra cosa fuera del tablero:
 
 ```powershell
 .\3-convertir.ps1
@@ -86,9 +98,6 @@ Después:
 
 Sin argumentos. Busca solo el export más reciente en Descargas y lo reconoce por
 la cabecera. Deja `rutas-detectadas.csv` con las columnas que el tablero ya lee.
-
-**Arrástralo al tablero.** Entra como una fuente más y se funde con lo que venga
-de Intune: lo que aparezca por los dos lados no se cuenta dos veces.
 
 ---
 

@@ -21,19 +21,8 @@
    maquinas tuyas, hoy.
    ========================================================================== */
 
-/* Los nombres que planta la remediacion, y el campo en el que cae cada uno. Van
-   aqui y no en el script porque el que tiene que reconocerlos es este lado.
-   «Parche anterior» no esta: trae varios valores por equipo y su sitio es la
-   busqueda y la Consulta libre, no una columna. */
-const PAR_MARCAS = {
-  'parche de windows': 'kb',
-  'parche instalado': 'fecha',
-  'upgrade de windows': 'upg',
-  'windows instalado': 'inst',
-  'windows anterior': 'antes',
-  'compilacion de windows': 'soloComp',
-  'compilación de windows': 'soloComp'
-};
+/* Los nombres que planta la remediacion y el campo en el que cae cada uno estan
+   en PAR_MARCAS, junto al codigo que los escribe (34_remediacion.js). */
 
 /** La compilacion partida: «10.0.26100.9445» -> { rel, rev }. */
 function compDe(osver) {
@@ -61,7 +50,7 @@ function parchesDeRemediacion() {
   const campo = new Array(ca.vals.length);
   let alguno = false;
   for (let k = 0; k < ca.vals.length; k++) {
-    const c = PAR_MARCAS[String(ca.vals[k] || '').trim().toLowerCase()];
+    const c = PAR_MARCAS[norm(ca.vals[k])];
     if (c) { campo[k] = c; alguno = true; }
   }
   if (!alguno) return out;

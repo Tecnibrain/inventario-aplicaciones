@@ -31,13 +31,15 @@ saber cuál contesta qué:
   «va 14 compilaciones por detrás» en «lleva cuatro meses sin parchear», que es la frase que
   mueve a alguien. Sin esto, esas columnas salen vacías y la vista lo dice.
 
-`3-convertir.ps1` lee el CSV de la remediación y reconoce dos formatos sin que haya que
-decirle cuál es: el de `2-deteccion.ps1` y una línea legible del tipo `Win 24H2 build
-26100.6899 | Upgrade: SI el 2026-03-10 | Ultimas KB: KB5066835 2026-10-14`, por si ya tienes
-tu propio script. Cada dato se saca por su forma y no por su posición, así que la redacción
-puede cambiar sin que deje de leerse. Si el equipo reporta una compilación más alta que la
-del inventario —normal: la remediación corre a diario y el export es del día que se hizo— el
-tablero usa la más alta y lo avisa.
+**El CSV de la remediación se arrastra tal cual**, sin convertir nada: el tablero lo reconoce
+por sus cabeceras y lo desdobla al vuelo. Entiende dos formatos sin que haya que decirle cuál
+es: el de `2-deteccion.ps1` y una línea legible del tipo `Win 24H2 build 26100.6899 |
+Upgrade: SI el 2026-03-10 | Ultimas KB: KB5066835 2026-10-14`, por si ya tienes tu propio
+script. Cada dato se saca por su forma y no por su posición, así que la redacción puede
+cambiar sin que deje de leerse. Si el equipo reporta una compilación más alta que la del
+inventario —normal: la remediación corre a diario y el export es del día que se hizo— el
+tablero usa la más alta y lo avisa. `3-convertir.ps1` hace lo mismo desde PowerShell, para
+quien quiera dejar el archivo preparado.
 
 **«Por detrás» se mide contra tu propio parque, no contra el calendario.** Si un equipo sale
 con 7 por detrás, hay siete compilaciones más nuevas que la suya instaladas hoy en máquinas

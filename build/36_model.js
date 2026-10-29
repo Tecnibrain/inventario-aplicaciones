@@ -121,6 +121,15 @@ function resetOrigen() {
 }
 
 function addSource(grid, fileName, sheet, reset) {
+  // Un export de remediacion no se parece a un inventario: una fila por equipo
+  // y todo apelmazado dentro de una columna. Se desdobla antes de mirarlo, y a
+  // partir de aqui es un archivo normal con las cabeceras de siempre.
+  const rem = expandeRemediacion(grid);
+  if (rem) {
+    grid = rem.grid;
+    toast(`Export de remediación: ${fmt(rem.equipos)} equipos, ${fmt(rem.filas)} filas` +
+          (rem.cortados ? ` · ${fmt(rem.cortados)} con la salida cortada por Intune` : ''));
+  }
   const headers = (grid[0] || []).map(h => String(h == null ? '' : h).trim());
   // Antes de detectar nada: si la cabecera llego entera en una sola columna, lo
   // que haya dentro puede encajar por casualidad («DeviceId;ApplicationName…»

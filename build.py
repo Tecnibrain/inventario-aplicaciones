@@ -24,6 +24,7 @@ PARTES = [
     '20_css_app.css',    # shell, navegacion, vistas, semaforos
     '05_body.html',      # cierre de <style>, marcado estatico, apertura de <script>
     '30_engine_io.js',   # lectores XLSX/CSV, fechas, deteccion de columnas, datos geo
+    '34_remediacion.js', # el export de remediacion de Intune, desdoblado al vuelo
     '35_tabla.js',       # almacen columnar: las filas como enteros. Va ANTES
                          # que el modelo: este llama a Tabla() al cargarse, y una
                          # const en zona muerta reventaria el arranque.
