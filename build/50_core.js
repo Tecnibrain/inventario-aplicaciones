@@ -531,9 +531,17 @@ function computeCompliance(rows) {
   const dVUnk = T.derivado('ver', ES_VUNK);      // por version distinta, no por fila
   const pesosC = T.pesos, diasC = T.dias;
   const idxC = rows.idx, nC = rows.length;
+  // Lo mismo que en el control de versiones: el nivel de parche entra en el
+  // modelo disfrazado de aplicacion y aqui no se evalua como tal. «KB5124008»
+  // no es una version que cumpla o deje de cumplir un estandar. Se resuelve
+  // una vez contra el diccionario -unos miles de nombres- y dentro del bucle
+  // es indexar un array.
+  const esMarca = new Uint8Array(vK ? vK.length : 0);
+  if (vK) for (let k = 0; k < vK.length; k++) if (esMarcaParche(vK[k])) esMarca[k] = 1;
   // Las dos condiciones son excluyentes, asi que una sola pasada basta.
   for (let k = 0; k < nC; k++) {
     const i = idxC ? idxC[k] : k;
+    if (aK && esMarca[aK[i]]) continue;
     const device = aD ? vD[aD[i]] : '';
     const key = aK ? vK[aK[i]] : '';
     const ver = aV ? vV[aV[i]] : '';

@@ -48,10 +48,14 @@ function parchesDeRemediacion() {
 
   // que ids del diccionario de aplicaciones son marcadores, y de que campo
   const campo = new Array(ca.vals.length);
-  let alguno = false;
+  const nPrev = norm(REM_NOM.prev);
+  let alguno = false, idPrev = -1;
   for (let k = 0; k < ca.vals.length; k++) {
-    const c = PAR_MARCAS[norm(ca.vals[k])];
+    const n = norm(ca.vals[k]);
+    const c = PAR_MARCAS[n];
     if (c) { campo[k] = c; alguno = true; }
+    // Los KB anteriores no son un campo: son una lista, y van aparte.
+    else if (n === nPrev) { idPrev = k; alguno = true; }
   }
   if (!alguno) return out;
 
@@ -61,12 +65,13 @@ function parchesDeRemediacion() {
   const R = M.rows, n = R ? R.length : 0;
   for (let k = 0; k < n; k++) {
     const i = R.fisico(k);
-    const c = campo[ca.a[i]];
-    if (!c) continue;
+    const a = ca.a[i];
+    const c = campo[a];
+    if (!c && a !== idPrev) continue;
     const dev = cd.vals[cd.a[i]];
     if (!dev) continue;
     let o = out.get(dev);
-    if (!o) out.set(dev, o = {});
+    if (!o) out.set(dev, o = { prev: [] });
     // La compilacion la reporta el equipo desde su propio registro y el mismo
     // dia, asi que viaja en todas sus filas. El inventario de Intune tambien la
     // trae, pero del dia del export.
@@ -76,9 +81,22 @@ function parchesDeRemediacion() {
     }
     if (c === 'soloComp') continue;
     const val = cv.a ? cv.vals[cv.a[i]] : '';
-    if (val) o[c] = val;
+    if (!val) continue;
+    if (a === idPrev) o.prev.push(val); else o[c] = val;
   }
   return out;
+}
+
+/* El calculo entero cuesta una pasada por el millon de filas, y la ficha de un
+   equipo lo pide otra vez para una sola linea. Se guarda el ultimo, y la firma
+   es lo que cambia cuando cambia el modelo: cargar, quitar o rehacer una
+   fuente mueve alguno de los tres. */
+let _parCache = null, _parFirma = '';
+function parchesDelParque() {
+  const firma = M.fileName + '|' + (M.rows ? M.rows.length : 0) + '|' + M.devInfo.size;
+  if (_parCache && _parFirma === firma) return _parCache;
+  _parFirma = firma;
+  return (_parCache = calculaParches());
 }
 
 /**
@@ -160,7 +178,8 @@ function calculaParches() {
         dev: d.dev, user: d.f.user || '', rel, comp: '10.0.' + o.base + '.' + d.rev,
         rev: d.rev, atras: pos.get(d.rev), tramo: tramoDe(pos.get(d.rev)),
         kb: r.kb || '', parcheado: r.fecha || '', dias: dias,
-        upg: r.upg || '', inst: r.inst || '', antes: r.antes || ''
+        upg: r.upg || '', inst: r.inst || '', antes: r.antes || '',
+        prev: r.prev || []
       });
     }
 
@@ -204,9 +223,12 @@ function calculaParches() {
   edades.sort((a, b) => a - b);
   const edadMed = edades.length ? edades[Math.floor(edades.length / 2)] : null;
 
+  const porDev = new Map();
+  for (const r of filas) porDev.set(r.dev, r);
+
   return { filas, releases, tramos, sinComp, conFecha: conFecha.length,
            conKb: filas.filter(r => r.kb).length, mediana, masFresca,
-           upSi, upNo, instMes, upDesde, edadMed, conInst: edades.length };
+           upSi, upNo, instMes, upDesde, edadMed, conInst: edades.length, porDev };
 }
 
 /* ---------------------------------------------------------------------------
@@ -221,7 +243,7 @@ function vParches(A, rows) {
       pero no cuáles. Para el nivel de parche hace falta el detalle.
     </div></div>`;
 
-  const P = calculaParches();
+  const P = parchesDelParque();
   const n = P.filas.length;
 
   if (!n) return viewHead('Parches', 'En qué nivel de parche va cada máquina del parque.') +
@@ -395,6 +417,78 @@ function vParches(A, rows) {
         if (c.n) return fmt(x[c.k]);
         return esc(x[c.k] == null ? '' : x[c.k]);
       } });
+}
+
+/* ---------------------------------------------------------------------------
+   Y lo mismo, para un solo equipo
+   ---------------------------------------------------------------------------
+   La ficha del equipo lo pide: abres una maquina y quieres ver en que nivel va
+   y que KB tiene puestos, sin volver a la tabla grande a buscarla.
+   ------------------------------------------------------------------------- */
+
+/** Si esta «aplicacion» es en realidad un dato de parches disfrazado. */
+function esMarcaParche(clave) {
+  const n = norm(String(clave).split(' / ').pop());
+  return !!PAR_MARCAS[n] || n === norm(REM_NOM.prev);
+}
+
+/** Los KB de un equipo, del mas reciente al mas viejo. */
+function kbsDeEquipo(f) {
+  const out = [];
+  if (f.kb) out.push({ kb: f.kb, fecha: f.parcheado || '' });
+  for (const v of (f.prev || [])) {
+    // «KB5065426 (2026-09-10)», que es como viajan los anteriores
+    const m = /^\s*(KB\d+)\s*(?:\(\s*(\d{4}-\d{2}-\d{2})\s*\))?/i.exec(v);
+    out.push(m ? { kb: m[1].toUpperCase(), fecha: m[2] || '' } : { kb: v, fecha: '' });
+  }
+  return out;
+}
+
+const mesesDe = d => fmt1(d / 30.4) + (d < 30.4 * 1.5 ? ' mes' : ' meses');
+
+/** El bloque de parches de la ficha de un equipo. Vacio si no se sabe nada. */
+function bloqueParches(dev) {
+  const P = parchesDelParque();
+  const f = P.porDev.get(dev);
+  if (!f) return '';                    // ni compilacion: no hay nada que decir
+
+  const t = PAR_TRAMOS[f.tramo];
+  const kbs = kbsDeEquipo(f);
+  const hayRem = !!(f.kb || f.inst || f.upg || f.antes || kbs.length);
+  const ha = d => `<div class="mini" style="color:var(--ink-4);font-weight:600">hace ${d}</div>`;
+
+  const facts = [
+    ['Compilación', `<span class="mono">${esc(f.comp)}</span>`],
+    ['Nivel de parche', f.atras === 0
+      ? '<span class="sem sem-pill ok">Al día</span>'
+      : `<span style="color:${t.c};font-weight:800">${fmt(f.atras)}</span> por detrás` +
+        `<div class="mini" style="color:var(--ink-4);font-weight:600">${esc(t.l.toLowerCase())}</div>`]
+  ];
+  if (f.kb) facts.push(['Último KB', `<span class="mono">${esc(f.kb)}</span>`]);
+  if (f.parcheado) facts.push(['Parcheado el',
+    esc(f.parcheado) + (f.dias != null ? ha(fmt(f.dias) + ' días') : '')]);
+  if (f.inst) {
+    const d = diasDesde(f.inst);
+    facts.push(['Windows instalado', esc(f.inst) + (d != null ? ha(mesesDe(d)) : '')]);
+  }
+  if (f.upg) facts.push(['Cómo llegó', /^no/i.test(f.upg)
+    ? 'Instalación limpia'
+    : 'Upgrade' + (f.antes ? `<div class="mini" style="color:var(--ink-4);font-weight:600">desde ${esc(f.antes)}</div>` : '')]);
+
+  const lista = kbs.length ? `<div class="fact" style="grid-column:1/-1">
+      <dt>KB aplicados${kbs.length > 1 ? ' · ' + fmt(kbs.length) : ''}</dt>
+      <dd style="font-weight:500">${kbs.map((x, i) =>
+        `<span class="pill${i ? '' : ' y'}" style="margin:0 6px 5px 0;font-family:var(--font-m)"
+           title="${i ? 'Anterior' : 'El más reciente'}">${esc(x.kb)}${
+           x.fecha ? ' · ' + esc(x.fecha) : ''}</span>`).join('')}</dd>
+    </div>` : '';
+
+  return sec('Parches de Windows', hayRem
+      ? 'Lo que reporta la remediación de este equipo'
+      : 'Sale de la compilación. El número de KB y la fecha llegan por una remediación') +
+    `<div class="sheet"><dl class="facts">${
+      facts.map(x => `<div class="fact"><dt>${x[0]}</dt><dd>${x[1]}</dd></div>`).join('')
+    }${lista}</dl></div>`;
 }
 
 VIEWS.parches = { l: 'Parches', ic: 'win', f: vParches };

@@ -156,6 +156,11 @@ function aggregate(rows) {
   /* --- control de versiones: quien esta por detras de la version de referencia --- */
   A.debt = []; A.devLag = new Map(); A.debtTotal = 0; A.upToDate = 0; A.pairs = 0; A.unknownVer = 0;
   A.appVerDev.forEach((vm, k) => {
+    // El nivel de parche viaja disfrazado de aplicacion, que es lo unico que el
+    // modelo sabe guardar. Pero un KB no es software atrasado: si entrara aqui,
+    // los 675 equipos de la remediacion saldrian como «con algo desactualizado»
+    // por tener un numero de KB distinto del mas alto del parque.
+    if (esMarcaParche(k)) return;
     const all = A.appDev.get(k) || new Set();
     A.pairs += all.size;
     const latest = M.latestVer ? M.latestVer.get(k) : undefined;

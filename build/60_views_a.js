@@ -662,7 +662,10 @@ function vEquipo(A, rows, dev) {
   const filtrando = activeDims().length > 0 || !!S.q.trim();
   const delIndice = !filtrando && M.indice;
   if (delIndice) M.indice.appsDe(dev).forEach((v, k) => { if (!best.has(k)) best.set(k, v); });
-  const apps = Array.from(best.entries()).map(([k, v]) => {
+  // El nivel de parche entra en el modelo disfrazado de aplicacion, que es lo
+  // unico que el tablero sabe guardar. Aqui se le quita el disfraz: esas filas
+  // no son programas y tienen su propio bloque mas abajo.
+  const apps = Array.from(best.entries()).filter(([k]) => !esMarcaParche(k)).map(([k, v]) => {
     const r = rule(k) || {};
     return { key:k, name: appLabel(k), vendor: pretty(vendorOfApp(k)), cat: r.cat || 'Otro',
       ver:v, rec: r.rec || '—', estado: evalVer(k, v), crit: r.crit ? 1 : 0,
@@ -681,7 +684,7 @@ function vEquipo(A, rows, dev) {
       <div class="fact"><dt>Usuario principal</dt><dd>${esc(f.user || 'no informado')}</dd></div>
       <div class="fact"><dt>Sistema operativo</dt><dd>${esc(f.os || 'Windows')}</dd></div>
       <div class="fact"><dt>Versión de Windows</dt><dd>${esc(f.osver)}</dd></div>
-      <div class="fact"><dt>Aplicaciones</dt><dd class="big">${fmt(best.size)}</dd></div>
+      <div class="fact"><dt>Aplicaciones</dt><dd class="big">${fmt(apps.length)}</dd></div>
       <div class="fact"><dt>Desactualizadas</dt><dd class="big" style="color:var(--warn-ink)">${fmt(A.devLag.get(dev) || 0)}</dd></div>
       <div class="fact"><dt>No cumplen</dt><dd class="big" style="color:${c.bad+c.noAuth.length?'var(--crit-ink)':'var(--ok-ink)'}">${fmt(c.bad + c.noAuth.length)}</dd></div>
       <div class="fact"><dt>Última sincronización</dt><dd>${c.last ? c.last.toLocaleString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'sin fecha'}
@@ -700,6 +703,7 @@ function vEquipo(A, rows, dev) {
         <div class="alert-t">${fmt(c.noAuth.length)} aplicaciones no permitidas en este equipo</div>
         <div class="alert-d">${c.noAuth.map(k => '<b>' + esc(appLabel(k)) + '</b>').join(' · ')}</div>
       </div></div></div>` : '') +
+    bloqueParches(dev) +
     sec('Aplicaciones instaladas', delIndice
       ? 'Todas las del inventario completo, ordenadas por severidad: primero lo que hay que corregir'
       : 'Ordenadas por severidad: primero lo que hay que corregir') +

@@ -41,6 +41,13 @@ inventario —normal: la remediación corre a diario y el export es del día que
 tablero usa la más alta y lo avisa. `3-convertir.ps1` hace lo mismo desde PowerShell, para
 quien quiera dejar el archivo preparado.
 
+Al abrir un equipo, su ficha trae su propio bloque de parches: compilación, cuántas por detrás
+va, el último KB con la fecha, cuándo se instaló el Windows que tiene y si llegó por upgrade o
+limpio, más **la lista de KB aplicados**. Esos datos no cuentan como software: entran en el
+modelo disfrazados de aplicación —es lo único que el tablero sabe guardar— y se les quita el
+disfraz antes de evaluar cumplimiento o versiones. Un número de KB no es una versión que
+cumpla o deje de cumplir nada.
+
 **«Por detrás» se mide contra tu propio parque, no contra el calendario.** Si un equipo sale
 con 7 por detrás, hay siete compilaciones más nuevas que la suya instaladas hoy en máquinas
 tuyas de esa misma versión de Windows. No se traduce a meses a propósito: haría falta una
