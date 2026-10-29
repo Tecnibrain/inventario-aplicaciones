@@ -19,6 +19,25 @@ nunca el inventario.
 3. La aplicación detecta las columnas sola y propone un estándar por aplicación.
 4. Ajusta ese estándar en **Administración** y el resto del tablero se recalcula.
 
+### Parches
+
+La vista **Parches** dice en qué nivel va cada máquina. Se alimenta de dos sitios y conviene
+saber cuál contesta qué:
+
+- **La compilación de Windows** viene en el inventario y está para todos los equipos:
+  `10.0.26100.9445`, y esos últimos dígitos son el parche del mes. Basta para saber quién va
+  detrás de quién, y no hay que pedir nada.
+- **El KB y su fecha** llegan por la remediación (`$Parches = 1` en `2-deteccion.ps1`). Es lo
+  que convierte «va 14 compilaciones por detrás» en «lleva cuatro meses sin parchear», que es
+  la frase que mueve a alguien. Sin esto, las dos últimas columnas salen vacías y la vista lo
+  dice.
+
+**«Por detrás» se mide contra tu propio parque, no contra el calendario.** Si un equipo sale
+con 7 por detrás, hay siete compilaciones más nuevas que la suya instaladas hoy en máquinas
+tuyas de esa misma versión de Windows. No se traduce a meses a propósito: haría falta una
+tabla de cada compilación con su día de publicación, Microsoft la cambia cada mes, y una
+tabla vieja miente con más aplomo que no tener ninguna.
+
 ### Bajarse cualquier tabla
 
 Toda tabla del tablero lleva un botón **Excel** a la derecha de su buscador. Se lleva la tabla

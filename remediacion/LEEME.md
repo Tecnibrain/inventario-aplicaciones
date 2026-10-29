@@ -76,23 +76,25 @@ de Intune: lo que aparezca por los dos lados no se cuenta dos veces.
 
 ## Parches de Windows
 
-Antes de activarlo: **el nivel de parche ya lo tienes sin pedir nada.** La columna
+Viene activado. Aun asi conviene saber que **el nivel de parche ya lo tienes sin pedir nada.** La columna
 `OSVersion` del inventario llega entera —`10.0.26100.9445`— y esos últimos dígitos son el
 parche del mes. En el tablero está como **Compilación de Windows**: agrupa por ella en
 Consulta libre y tienes el reparto de parches del parque, con su botón de Excel.
 
-Lo que esto añade es el **número de KB**, que se puede buscar y que cubre lo que no es del
-sistema operativo (.NET y demás). En `2-deteccion.ps1`:
+Lo que esto añade es el **número de KB** —que se puede buscar, y cubre lo que no es del
+sistema operativo (.NET y demás)— y sobre todo la **fecha**. La compilación dice quién va
+detrás de quién; la fecha dice *desde cuándo*, y «lleva cuatro meses sin parchear» es la
+frase que mueve a alguien. En `2-deteccion.ps1`:
 
 | `$Parches` | Qué reporta |
 |---|---|
-| `0` | nada. Es lo normal |
-| `1` | `Parche de Windows=KB5127936` — una aplicación más, con el KB de versión. Ponle versión aprobada y el cumplimiento de parches sale solo |
-| `N` | los N más recientes, uno por KB y con su fecha de instalación |
+| `0` | nada |
+| `1` | **el valor por defecto.** Dos líneas: `Parche de Windows=KB5127936` y `Parche instalado=2026-10-29`. Es lo que alimenta la vista **Parches** del tablero |
+| `N` | los N más recientes, uno por KB y con su fecha. Para auditar un equipo concreto |
 
-Con `N` mayor que 1, **cada KB distinto es una aplicación distinta** en el catálogo del
-tablero. En un parque grande son cientos de líneas que no son programas. Para auditar el
-nivel de parche, `1` es lo que quieres.
+Con `N` mayor que 1, **cada KB distinto pasa a ser una aplicación distinta** en el catálogo
+del tablero. En un parque grande son cientos de líneas que no son programas, y el catálogo
+deja de poder navegarse. Para el nivel de parche del parque, `1` es lo que quieres.
 
 Sale de `Win32_QuickFixEngineering`, que es rápido pero no lo trae todo: lo que entra por la
 pila de mantenimiento a veces no aparece. La compilación de Windows cubre ese hueco, y por

@@ -64,19 +64,20 @@ $CodigoSalida = 0
 
 # Los ultimos parches instalados, por numero de KB.
 #
-#   0   nada. Es lo normal, y no porque el dato no sirva: la compilacion de
-#       Windows que YA viene en el inventario -"10.0.26100.9445"- son los
-#       ultimos digitos el parche del mes, y eso lo tienes sin pedir nada.
-#   1   el KB mas reciente, como "Parche de Windows=KB5062553". Una sola
-#       aplicacion mas en el tablero, con el KB de version: asi se le puede
-#       poner version aprobada y el cumplimiento de parches sale solo.
-#   N   los N mas recientes, uno por KB y con su fecha de instalacion. Cuidado:
-#       cada KB distinto es una aplicacion distinta en el catalogo, y en un
-#       parque grande son cientos de lineas que no son programas.
+#   0   nada.
+#   1   el mas reciente, en dos lineas: el KB y su fecha de instalacion. Es lo
+#       que alimenta la pantalla de Parches del tablero, y lo recomendado.
+#   N   los N mas recientes, uno por KB y con su fecha. Para auditar un equipo
+#       concreto. Cuidado: cada KB distinto pasa a ser una aplicacion distinta
+#       en el catalogo, y en un parque grande son cientos de lineas que no son
+#       programas.
 #
-# Lo que esto anade sobre la compilacion: el numero de KB se puede buscar, y
-# cubre lo que no es del sistema operativo -.NET y demas-.
-$Parches = 0
+# Lo que esto anade sobre la compilacion de Windows -que YA viene en el
+# inventario, "10.0.26100.9445", y cuyos ultimos digitos son el parche del
+# mes-: el numero de KB se puede buscar, cubre lo que no es del sistema
+# operativo -.NET y demas-, y sobre todo trae la FECHA, que es de donde sale
+# cuanto lleva un equipo sin parchear. La compilacion sola no la tiene.
+$Parches = 1
 
 # ============================================================== OBJETIVOS
 #
@@ -234,9 +235,18 @@ if ($Parches -gt 0) {
         $hf = @($lista | Sort-Object Ticks, Num -Descending | Select-Object -First $Parches)
 
         if ($Parches -eq 1 -and $hf.Count) {
-            # Una linea y una aplicacion: el KB de version, listo para que el
-            # tablero lo puntue contra la version aprobada que le pongas.
+            # Dos lineas y dos aplicaciones, no una por KB. El catalogo del
+            # tablero es de programas; meterle un KB distinto por equipo y por
+            # mes lo llena de cosas que no son programas y ya no se navega.
+            #
+            #   Parche de Windows=KB5127936   el KB, para ponerle version
+            #                                 aprobada y que puntue solo
+            #   Parche instalado=2026-10-29   la fecha, que es de donde sale
+            #                                 "cuanto lleva sin parchear"
             $partes += ('Parche de Windows=' + (Limpia $hf[0].KB))
+            if ($hf[0].Ticks) {
+                $partes += ('Parche instalado=' + (New-Object DateTime($hf[0].Ticks)).ToString('yyyy-MM-dd'))
+            }
         } else {
             foreach ($h in $hf) {
                 $f = '1'
@@ -274,12 +284,12 @@ if ($Prueba) {
         exit 0
     }
     if ($Parches -gt 0) {
-        $kb = @($partes | Where-Object { $_ -match '^(KB\d+|Parche de Windows)=' })
+        $kb = @($partes | Where-Object { $_ -match '^(KB\d+|Parche de Windows|Parche instalado)=' })
         foreach ($p in $kb) { Write-Host ("  [x] {0}" -f $p.Replace('=', '  ')) -ForegroundColor Green }
         if (-not $kb.Count) { Write-Host '  [ ] parches: no devolvio ninguno' -ForegroundColor DarkYellow }
     }
     Write-Host ('  {0} de {1} objetivos presentes, {2} con error de lectura' -f
-        ($partes.Count - $(if ($Parches -gt 0) { @($partes | Where-Object { $_ -match '^(KB\d+|Parche de Windows)=' }).Count } else { 0 })),
+        ($partes.Count - $(if ($Parches -gt 0) { @($partes | Where-Object { $_ -match '^(KB\d+|Parche de Windows|Parche instalado)=' }).Count } else { 0 })),
         $Objetivos.Count, $fallos) -ForegroundColor Cyan
     Write-Host ('  Salida: {0} caracteres de {1} de tope' -f $carga.Length, $TopeSalida) -ForegroundColor Cyan
     if ($carga -like '*+CORTADO*') {

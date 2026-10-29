@@ -80,7 +80,9 @@ $Fabricantes = @{
 # salen varios nuevos cada mes, asi que se reconocen por la forma del nombre.
 function Fabricante-De([string]$id) {
     if ($Fabricantes.ContainsKey($id)) { return $Fabricantes[$id] }
-    if ($id -match '^KB\d+$' -or $id -eq 'Parche de Windows') { return 'Microsoft Corporation' }
+    if ($id -match '^KB\d+$' -or $id -eq 'Parche de Windows' -or $id -eq 'Parche instalado') {
+        return 'Microsoft Corporation'
+    }
     return ''
 }
 

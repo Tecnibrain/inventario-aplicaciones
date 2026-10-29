@@ -16,7 +16,7 @@ function renderNav(A) {
   };
   $('#nav').innerHTML =
     `<div class="nav-grp">Panel</div>` + ['resumen','base','cumplimiento'].map(item).join('') +
-    `<div class="nav-grp">Inventario</div>` + ['aplicaciones','equipos','versiones','mapas'].map(item).join('') +
+    `<div class="nav-grp">Inventario</div>` + ['aplicaciones','equipos','parches','versiones','mapas'].map(item).join('') +
     `<div class="nav-grp">Gestión</div>` + ['consulta','datos','tendencias','informe','admin'].map(item).join('');
 }
 
