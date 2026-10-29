@@ -1,5 +1,5 @@
 <#
-    Linea base por ruta de archivo  -  paso 3 de 3:  del CSV de Intune al tablero
+    De la salida de una remediacion de Intune al tablero  -  paso 3 de 3
 
     De donde sale el CSV de entrada:
       Intune > Dispositivos > Remediaciones > [la tuya] > Estado del dispositivo
@@ -7,11 +7,23 @@
       deteccion en una columna.
 
     Que hace esto:
-      Esa columna trae 23 aplicaciones apelmazadas en una cadena. El tablero
-      quiere una fila por instalacion. Aqui se desdobla y se le ponen las
-      cabeceras que el tablero ya reconoce:
+      Esa columna trae varias cosas apelmazadas en una sola cadena. El tablero
+      quiere una fila por dato. Aqui se desdobla y se le ponen las cabeceras que
+      el tablero ya reconoce:
 
           DeviceName, SoftwareVendor, SoftwareName, SoftwareVersion, LastContact
+
+    Reconoce dos formatos de salida, y no hay que decirle cual es:
+
+      LB1;23;Netskope=132.0.20.2563~Webex=46.5.0
+          el de 2-deteccion.ps1: linea base por ruta de archivo.
+
+      Win 24H2 build 26100.6899 | Upgrade: SI el 2026-03-10 (desde 23H2 build
+      22631.4890) | Ultimas KB: KB5066835 2026-10-14; KB5065426 2026-09-10
+          nivel de parche de Windows, en una linea legible. De aqui sale el
+          apartado Parches del tablero. Cada dato se saca por su forma -el KB
+          parece un KB, la fecha parece una fecha- y no por su posicion, asi que
+          la redaccion de la linea puede cambiar sin que esto deje de leerla.
 
       El resultado se arrastra al tablero como una fuente mas y se funde con lo
       que ya venga de Intune: si Netskope aparece por los dos lados, es la misma
@@ -78,11 +90,17 @@ $Fabricantes = @{
 
 # Los parches no caben en la tabla de arriba: cada KB es un numero distinto y
 # salen varios nuevos cada mes, asi que se reconocen por la forma del nombre.
+$Windows = @{
+    'Parche de Windows'      = $true
+    'Parche instalado'       = $true
+    'Parche anterior'        = $true
+    'Upgrade de Windows'     = $true
+    'Windows anterior'       = $true
+    'Compilacion de Windows' = $true
+}
 function Fabricante-De([string]$id) {
     if ($Fabricantes.ContainsKey($id)) { return $Fabricantes[$id] }
-    if ($id -match '^KB\d+$' -or $id -eq 'Parche de Windows' -or $id -eq 'Parche instalado') {
-        return 'Microsoft Corporation'
-    }
+    if ($id -match '^KB\d+$' -or $Windows.ContainsKey($id)) { return 'Microsoft Corporation' }
     return ''
 }
 
@@ -176,6 +194,73 @@ function Fecha-De([string]$s) {
     return $null
 }
 
+# ======================================================== EL OTRO FORMATO
+#
+# Una linea legible con el nivel de parche del equipo:
+#
+#   Win 24H2 build 26100.6899 | Upgrade: SI el 2026-03-10 (desde 23H2 build
+#   22631.4890) | Ultimas KB: KB5066835 2026-10-14; KB5065426 2026-09-10
+#
+# No se parte por el separador ni se cuentan posiciones: cada dato se saca por
+# su forma. Un KB parece un KB y una fecha parece una fecha, asi que la linea
+# puede cambiar de redaccion -o de idioma- y esto sigue leyendola. Es lo que
+# acaba pasando: el script lo retoca otra persona y nadie avisa.
+function Parse-Win([string]$linea) {
+    if (-not $linea) { return $null }
+    $r = @{ Comp = ''; Rel = ''; Upg = ''; Antes = ''; Kbs = @() }
+
+    # La compilacion con su UBR: 26100.6899. Los ultimos digitos son el parche.
+    $m = [regex]::Match($linea, '(?i)\bbuild\s+(\d{4,6})\.(\d+)')
+    if (-not $m.Success) { $m = [regex]::Match($linea, '\b(\d{5,6})\.(\d{1,5})\b') }
+    if ($m.Success) { $r.Comp = '10.0.' + $m.Groups[1].Value + '.' + $m.Groups[2].Value }
+
+    # La version comercial, si viene escrita. Si no, el tablero la deduce de la
+    # compilacion, que es de donde la saca para todo el resto del parque.
+    $m = [regex]::Match($linea, '\b(2[0-9]H[12])\b')
+    if ($m.Success) { $r.Rel = $m.Groups[1].Value }
+
+    # Upgrade de version. La fecha se busca dentro del tramo del upgrade -de ahi
+    # el [^|]- para no acabar cogiendo la fecha de un KB.
+    $m = [regex]::Match($linea, '(?i)upgrade[^a-z0-9]{0,4}([a-z]+)')
+    if ($m.Success) {
+        $tok = $m.Groups[1].Value.ToLowerInvariant()
+        if ($tok.StartsWith('s') -or $tok.StartsWith('y')) {
+            $f = [regex]::Match($linea, '(?i)upgrade[^|]*?(\d{4}-\d{2}-\d{2})')
+            if ($f.Success) { $r.Upg = $f.Groups[1].Value } else { $r.Upg = 'Si' }
+            $d = [regex]::Match($linea, '(?i)\b(?:desde|from)\s+([^)|;]+)')
+            if ($d.Success) {
+                $r.Antes = ($d.Groups[1].Value.Trim() -replace '(?i)\s+build\s+', ' ')
+            }
+        } elseif ($tok.StartsWith('n')) {
+            # Seco a proposito: este valor acaba siendo la "version" de una
+            # aplicacion en el catalogo del tablero, y ahi una frase estorba.
+            $r.Upg = 'No'
+        }
+    }
+
+    # Los KB, con la fecha que venga pegada detras.
+    $vistos = @{}
+    foreach ($k in [regex]::Matches($linea, '(?i)\b(KB\d{5,})\b(?:\s*[(\[]?\s*(\d{4}-\d{2}-\d{2}))?')) {
+        $kb = $k.Groups[1].Value.ToUpperInvariant()
+        if ($vistos.ContainsKey($kb)) { continue }
+        $vistos[$kb] = $true
+        $r.Kbs += New-Object PSObject -Property @{
+            Kb = $kb; Fecha = $k.Groups[2].Value
+        }
+    }
+    # El script los manda del mas nuevo al mas viejo, pero eso es una costumbre
+    # suya, no una garantia. Si todos traen fecha se reordena por fecha, que es
+    # el unico criterio que no miente: el numero de KB mas alto puede ser el mas
+    # viejo -KB5132402 se instalo el 28 y KB5127936 el 29- y confiar en el
+    # numero es justo el fallo que pone 'al dia' a un equipo que no lo esta.
+    if ($r.Kbs.Count -gt 1 -and -not ($r.Kbs | Where-Object { -not $_.Fecha })) {
+        $r.Kbs = @($r.Kbs | Sort-Object Fecha -Descending)
+    }
+
+    if (-not $r.Comp -and -not $r.Kbs.Count -and -not $r.Upg) { return $null }
+    return $r
+}
+
 Write-Host ''
 Write-Host ("  Leyendo {0}" -f (Split-Path -Leaf $Entrada)) -ForegroundColor Cyan
 $filas = @(Import-Csv -LiteralPath $Entrada)
@@ -185,11 +270,16 @@ $cab = $filas[0].PSObject.Properties.Name
 
 $cEquipo = Columna-Por $cab @('devicename', 'nombrededispositivo', 'nombredispositivo', 'equipo') `
                             @('devicename', 'device', 'dispositivo', 'equipo', 'hostname') @('id')
+# Ojo con la consola en espanol: Norma() tira todo lo que no sea a-z0-9, y la
+# tilde de "deteccion" se va con ella. "Salida de deteccion previa a la
+# correccion" acaba siendo 'salidadedeteccinpreviaalacorreccin', con la i sola.
 $cCarga  = Columna-Por $cab @() `
                             @('preremediationdetection', 'detectionoutput', 'preremediation',
-                              'saliddeteccion', 'saliddedeteccion', 'output', 'salida') @()
+                              'salidadedeteccin', 'salidadedeteccion', 'deteccinprevia',
+                              'deteccionprevia', 'output', 'salida') @()
 $cUsr    = Columna-Por $cab @('username', 'upn', 'usuario') @('user', 'upn', 'usuario') @('id')
-$cFecha  = Columna-Por $cab @() @('lastrun', 'ultimaejecucion', 'date', 'fecha', 'time', 'hora') @()
+$cFecha  = Columna-Por $cab @() @('lastrun', 'lastsync', 'date', 'fecha', 'time', 'hora',
+                                  'ejecucin', 'ejecucion', 'sincronizacin', 'sincronizacion') @()
 
 if (-not $cEquipo) { throw ("No reconozco la columna del equipo. Cabeceras: " + ($cab -join ', ')) }
 if (-not $cCarga)  { throw ("No reconozco la columna de la salida del script. Cabeceras: " + ($cab -join ', ')) }
@@ -202,11 +292,25 @@ if ($cFecha) { Write-Host ("  Fecha    -> {0}" -f $cFecha) -ForegroundColor Dark
 # Un equipo puede aparecer varias veces si la remediacion lleva dias corriendo.
 # Se queda la ejecucion mas reciente; a falta de fecha, la ultima del archivo.
 $ultima = @{}
+$nLb = 0
+$nWin = 0
 foreach ($f in $filas) {
     $eq = [string]$f.$cEquipo
     if (-not $eq) { continue }
     $carga = [string]$f.$cCarga
-    if (-not $carga -or $carga -notlike 'LB1;*') { continue }
+    if (-not $carga) { continue }
+
+    # El formato se decide por lo que trae la linea, no por un ajuste: la misma
+    # carpeta sirve para las dos remediaciones y una menos que recordar.
+    $tipo = ''
+    $win = $null
+    if ($carga -like 'LB1;*') {
+        $tipo = 'LB1'
+    } else {
+        $win = Parse-Win $carga
+        if ($win) { $tipo = 'WIN' }
+    }
+    if (-not $tipo) { continue }
 
     $fecha = $null
     if ($cFecha) { $fecha = Fecha-De ([string]$f.$cFecha) }
@@ -215,19 +319,30 @@ foreach ($f in $filas) {
         $prev = $ultima[$eq]
         if ($fecha -and $prev.Fecha -and $fecha -le $prev.Fecha) { continue }
         if (-not $fecha -and $prev.Fecha) { continue }
+        if ($prev.Tipo -eq 'LB1') { $nLb-- } else { $nWin-- }
     }
+    if ($tipo -eq 'LB1') { $nLb++ } else { $nWin++ }
     $ultima[$eq] = [PSCustomObject]@{
+        Tipo  = $tipo
         Carga = $carga
+        Win   = $win
         Fecha = $fecha
         Usr   = if ($cUsr) { [string]$f.$cUsr } else { '' }
     }
 }
 
 Write-Host ("  {0} filas, {1} equipos con datos" -f $filas.Count, $ultima.Count) -ForegroundColor DarkGray
+if ($nLb)  { Write-Host ("  {0} en formato de linea base" -f $nLb) -ForegroundColor DarkGray }
+if ($nWin) { Write-Host ("  {0} en formato de parches de Windows" -f $nWin) -ForegroundColor DarkGray }
 
 if (-not $ultima.Count) {
     Write-Host ''
-    Write-Host '  Ningun equipo trae carga util en formato LB1.' -ForegroundColor Red
+    Write-Host '  Ningun equipo trae carga que se pueda leer.' -ForegroundColor Red
+    Write-Host ("  Se reconoce 'LB1;...' y la linea de parches 'Win 24H2 build " +
+                "26100.6899 | ...'.") -ForegroundColor DarkYellow
+    Write-Host '  Mira la columna de salida en el CSV: esto es lo primero que vino:' -ForegroundColor DarkYellow
+    Write-Host ('    ' + ([string]$filas[0].$cCarga).Substring(0,
+                [Math]::Min(150, ([string]$filas[0].$cCarga).Length))) -ForegroundColor DarkGray
     Write-Host '  Si la columna de salida esta vacia para todos, abre 2-deteccion.ps1' -ForegroundColor DarkYellow
     Write-Host '  y pon $CodigoSalida = 1: algunos inquilinos solo guardan la salida' -ForegroundColor DarkYellow
     Write-Host '  cuando el equipo se marca como "con problemas".' -ForegroundColor DarkYellow
@@ -253,17 +368,62 @@ $ids = @{}
 $cortados = 0
 
 try {
-    $sw.WriteLine('DeviceName,SoftwareVendor,SoftwareName,SoftwareVersion,UserName,LastContact')
+    $sw.WriteLine('DeviceName,SoftwareVendor,SoftwareName,SoftwareVersion,UserName,LastContact,OSVersion')
+
+    # Una fila del CSV de salida. El tablero lee 'una aplicacion instalada en un
+    # equipo', asi que el nivel de parche entra disfrazado de eso: nombres fijos
+    # -cinco, no uno por KB- y el dato en la columna de version. Fijos porque si
+    # cada KB fuera una aplicacion distinta, el catalogo se llenaria de cientos
+    # de lineas que no son programas y dejaria de poder navegarse.
+    function Escribe($eq, $nombre, $valor, $usr, $fecha, $comp) {
+        if (-not $valor) { return }
+        $ids[$nombre] = $true
+        $sw.WriteLine((Cs $eq) + ',' + (Cs (Fabricante-De $nombre)) + ',' + (Cs $nombre) + ',' +
+                      (Cs $valor) + ',' + (Cs $usr) + ',' + (Cs $fecha) + ',' + (Cs $comp))
+        $script:nFilas++
+    }
+
     foreach ($eq in $ultima.Keys) {
         $d = $ultima[$eq]
+
+        $fecha = ''
+        if ($d.Fecha) { $fecha = $d.Fecha.ToString('yyyy-MM-dd HH:mm:ss') }
+
+        # ---- el formato de parches de Windows
+        if ($d.Tipo -eq 'WIN') {
+            $w = $d.Win
+            # La compilacion no va como fila: va en su columna, la misma que
+            # trae el inventario de Intune. Asi el apartado Parches funciona
+            # aunque este CSV sea lo unico que se haya cargado.
+            $comp = $w.Comp
+            if ($w.Kbs.Count) {
+                Escribe $eq 'Parche de Windows' $w.Kbs[0].Kb $d.Usr $fecha $comp
+                Escribe $eq 'Parche instalado' $w.Kbs[0].Fecha $d.Usr $fecha $comp
+                # Los demas van todos bajo el mismo nombre, con el KB y su dia
+                # en la version: se pueden buscar y agrupar sin que cada numero
+                # de KB se convierta en una aplicacion del catalogo.
+                for ($k = 1; $k -lt $w.Kbs.Count; $k++) {
+                    $v = $w.Kbs[$k].Kb
+                    if ($w.Kbs[$k].Fecha) { $v = $v + ' (' + $w.Kbs[$k].Fecha + ')' }
+                    Escribe $eq 'Parche anterior' $v $d.Usr $fecha $comp
+                }
+            }
+            Escribe $eq 'Upgrade de Windows' $w.Upg $d.Usr $fecha $comp
+            Escribe $eq 'Windows anterior' $w.Antes $d.Usr $fecha $comp
+            # Un equipo que solo reporta compilacion -ni KB ni upgrade- tambien
+            # cuenta: sin una fila no entra en el tablero y se perderia su nivel.
+            if (-not $w.Kbs.Count -and -not $w.Upg -and -not $w.Antes -and $comp) {
+                Escribe $eq 'Compilacion de Windows' $comp $d.Usr $fecha $comp
+            }
+            continue
+        }
+
+        # ---- el formato de linea base por ruta
         $trozos = $d.Carga.Split(';')
         if ($trozos.Length -lt 3) { continue }
         $cuerpo = $trozos[2]
         if ($cuerpo -like '*+CORTADO*') { $cortados++; $cuerpo = $cuerpo.Replace('~+CORTADO', '') }
         if (-not $cuerpo) { continue }
-
-        $fecha = ''
-        if ($d.Fecha) { $fecha = $d.Fecha.ToString('yyyy-MM-dd HH:mm:ss') }
 
         foreach ($par in $cuerpo.Split('~')) {
             $i = $par.IndexOf('=')
@@ -271,19 +431,13 @@ try {
             $id  = $par.Substring(0, $i)
             $ver = $par.Substring($i + 1)
             if (-not $id) { continue }
-            $ids[$id] = $true
-
-            $fab = Fabricante-De $id
-
-            $sw.WriteLine((Cs $eq) + ',' + (Cs $fab) + ',' + (Cs $id) + ',' +
-                          (Cs $ver) + ',' + (Cs $d.Usr) + ',' + (Cs $fecha))
-            $nFilas++
+            Escribe $eq $id $ver $d.Usr $fecha ''
         }
     }
 } finally { $sw.Close() }
 
 Write-Host ''
-Write-Host ("  {0} instalaciones escritas en {1}" -f $nFilas, (Split-Path -Leaf $Salida)) -ForegroundColor Green
+Write-Host ("  {0} filas escritas en {1}" -f $nFilas, (Split-Path -Leaf $Salida)) -ForegroundColor Green
 if ($cortados) {
     Write-Host ("  {0} equipos traen la salida cortada por el tope de Intune." -f $cortados) -ForegroundColor Red
     Write-Host '  Parte los objetivos en dos remediaciones.' -ForegroundColor DarkYellow
@@ -308,7 +462,9 @@ if ($Parquet) {
         # duckdb trata \ como escape: todas las rutas con /
         $eIn  = $Salida.Replace('\', '/')
         $eOut = [IO.Path]::ChangeExtension($Salida, '.parquet').Replace('\', '/')
-        $sql = "COPY (SELECT * FROM read_csv_auto('$eIn', header=true)) TO '$eOut' (FORMAT PARQUET, COMPRESSION ZSTD);"
+        # snappy y no zstd: el lector de parquet del tablero no trae
+        # descompresor de zstd y el archivo no se abriria. Pesa algo mas.
+        $sql = "COPY (SELECT * FROM read_csv_auto('$eIn', header=true)) TO '$eOut' (FORMAT PARQUET, COMPRESSION snappy);"
         & $duck -c $sql
         if ($LASTEXITCODE -eq 0) {
             Write-Host ("  Parquet: {0}" -f (Split-Path -Leaf $eOut)) -ForegroundColor Green

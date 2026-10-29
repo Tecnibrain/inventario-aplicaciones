@@ -1,15 +1,37 @@
-# Línea base por ruta de archivo
-
-Sacar del parque cosas que el inventario de programas instalados **no ve**: un
-archivo en una ruta concreta, con su versión.
+# Sacar del parque lo que el inventario no ve
 
 El vehículo es una remediación de Intune, pero **no se remedia nada**. Se
 aprovecha que Intune captura lo que el script de detección escribe por pantalla
 y que eso se descarga después como CSV.
 
+Aquí hay dos cosas montadas sobre ese mismo vehículo:
+
+| | Para qué | Qué hace falta |
+|---|---|---|
+| **Línea base por ruta** | un archivo en una ruta concreta, con su versión, que el inventario de programas instalados no ve | los tres pasos de abajo |
+| **Parches de Windows** | el KB y el día en que entró, que Intune no muestra por ningún lado | **solo el paso 3**, si ya tienes tu remediación |
+
+> ### Si ya tienes tu propia remediación de parches
+>
+> `3-convertir.ps1` la lee sin tocar nada. Reconoce una línea del tipo:
+>
+> ```
+> Win 24H2 build 26100.6899 | Upgrade: SI el 2026-03-10 (desde 23H2 build
+> 22631.4890) | Ultimas KB: KB5066835 2026-10-14; KB5065426 2026-09-10
+> ```
+>
+> Cada dato se saca **por su forma** —el KB parece un KB, la fecha parece una
+> fecha— y no por su posición, así que la redacción puede cambiar y sigue
+> leyéndose. Exporta el CSV del portal, ejecuta `.\3-convertir.ps1` sin
+> argumentos y arrastra el resultado: el apartado **Parches** se llena solo.
+>
+> De los KB que vengan, el primero es el **más reciente por fecha**, no el de
+> número más alto. No es lo mismo: KB5132402 se instaló el 28 y KB5127936 el 29,
+> y el número grande es el viejo.
+
 ---
 
-## Lo que haces una sola vez
+## Lo que haces una sola vez (línea base)
 
 ### 1. En un equipo que tenga instalado lo de la línea base
 
@@ -69,36 +91,63 @@ de Intune: lo que aparezca por los dos lados no se cuenta dos veces.
 |---|---|
 | `1-preparar.ps1` | Tu equipo, una vez. Rellena el script de detección |
 | `2-deteccion.ps1` | **El que se sube a Intune** |
-| `3-convertir.ps1` | Tu equipo, cada vez |
+| `3-convertir.ps1` | Tu equipo, cada vez. Entiende los dos formatos de salida |
 | `remediacion-vacia.ps1` | Solo si algún día pones `$CodigoSalida = 1` |
 
 ---
 
 ## Parches de Windows
 
-Viene activado. Aun asi conviene saber que **el nivel de parche ya lo tienes sin pedir nada.** La columna
-`OSVersion` del inventario llega entera —`10.0.26100.9445`— y esos últimos dígitos son el
-parche del mes. En el tablero está como **Compilación de Windows**: agrupa por ella en
-Consulta libre y tienes el reparto de parches del parque, con su botón de Excel.
+Antes que nada: **el nivel de parche ya lo tienes sin pedir nada.** La columna `OSVersion`
+del inventario llega entera —`10.0.26100.9445`— y esos últimos dígitos son el parche del
+mes. El apartado **Parches** del tablero funciona solo con eso.
 
-Lo que esto añade es el **número de KB** —que se puede buscar, y cubre lo que no es del
-sistema operativo (.NET y demás)— y sobre todo la **fecha**. La compilación dice quién va
-detrás de quién; la fecha dice *desde cuándo*, y «lleva cuatro meses sin parchear» es la
-frase que mueve a alguien. En `2-deteccion.ps1`:
+Lo que la remediación añade es el **número de KB** —que se puede buscar, y cubre lo que no
+es del sistema operativo (.NET y demás)— y sobre todo la **fecha**. La compilación dice
+quién va detrás de quién; la fecha dice *desde cuándo*, y «lleva cuatro meses sin parchear»
+es la frase que mueve a alguien.
+
+### Lo que el convertidor deja en el CSV
+
+Nombres **fijos**, cinco, y el dato en la columna de versión. Fijos a propósito: si cada KB
+fuera una aplicación distinta, el catálogo del tablero se llenaría de cientos de líneas que
+no son programas y dejaría de poder navegarse.
+
+| Nombre | Versión | Dónde sale |
+|---|---|---|
+| `Parche de Windows` | `KB5066835` | columna **Último KB** |
+| `Parche instalado` | `2026-10-14` | columnas **Parcheado el** y **Días** |
+| `Parche anterior` | `KB5065426 (2026-09-10)` | no tiene columna: se busca y se agrupa en **Consulta libre** |
+| `Upgrade de Windows` | `2026-03-10` o `No` | columna **Upgrade** y la sección de upgrades |
+| `Windows anterior` | `23H2 22631.4890` | columna **Venía de** |
+
+Además va la compilación en su propia columna, `OSVersion`, la misma que trae el inventario.
+Si el equipo reporta una **más alta** que la del inventario, el tablero usa la más alta y lo
+avisa: el inventario es del día del export y la remediación corre a diario, así que el UBR
+de la remediación suele ser el de verdad. De dos compilaciones del mismo equipo se toma
+siempre la mayor, porque el UBR de una máquina solo sube.
+
+### Con `2-deteccion.ps1`
+
+Viene activado. El ajuste `$Parches`:
 
 | `$Parches` | Qué reporta |
 |---|---|
 | `0` | nada |
-| `1` | **el valor por defecto.** Dos líneas: `Parche de Windows=KB5127936` y `Parche instalado=2026-10-29`. Es lo que alimenta la vista **Parches** del tablero |
+| `1` | **el valor por defecto.** `Parche de Windows=KB5127936` y `Parche instalado=2026-10-29` |
 | `N` | los N más recientes, uno por KB y con su fecha. Para auditar un equipo concreto |
 
-Con `N` mayor que 1, **cada KB distinto pasa a ser una aplicación distinta** en el catálogo
-del tablero. En un parque grande son cientos de líneas que no son programas, y el catálogo
-deja de poder navegarse. Para el nivel de parche del parque, `1` es lo que quieres.
+Con `N` mayor que 1 **cada KB sí pasa a ser una aplicación distinta**, que es justo lo que
+los nombres fijos evitan. Para el nivel de parche del parque, `1` es lo que quieres.
 
 Sale de `Win32_QuickFixEngineering`, que es rápido pero no lo trae todo: lo que entra por la
-pila de mantenimiento a veces no aparece. La compilación de Windows cubre ese hueco, y por
-eso conviene mirar las dos.
+pila de mantenimiento a veces no aparece. El historial de Windows Update por COM
+(`Microsoft.Update.Session`) sí lo ve, y es lo que conviene si el script lo escribes tú.
+La compilación de Windows cubre ese hueco igual, y por eso conviene mirar las dos.
+
+> El «último KB» puede ser un acumulativo de **.NET** y no del sistema operativo, si entró
+> después. Es fiel a lo que pregunta —la última actualización aplicada— pero no es lo mismo
+> que el último parche de Windows. Para eso está la compilación, que no se deja engañar.
 
 ## Los límites, antes de montar nada encima
 

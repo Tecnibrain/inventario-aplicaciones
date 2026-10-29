@@ -27,10 +27,17 @@ saber cuál contesta qué:
 - **La compilación de Windows** viene en el inventario y está para todos los equipos:
   `10.0.26100.9445`, y esos últimos dígitos son el parche del mes. Basta para saber quién va
   detrás de quién, y no hay que pedir nada.
-- **El KB y su fecha** llegan por la remediación (`$Parches = 1` en `2-deteccion.ps1`). Es lo
-  que convierte «va 14 compilaciones por detrás» en «lleva cuatro meses sin parchear», que es
-  la frase que mueve a alguien. Sin esto, las dos últimas columnas salen vacías y la vista lo
-  dice.
+- **El KB, su fecha y el upgrade de versión** llegan por una remediación. Es lo que convierte
+  «va 14 compilaciones por detrás» en «lleva cuatro meses sin parchear», que es la frase que
+  mueve a alguien. Sin esto, esas columnas salen vacías y la vista lo dice.
+
+`3-convertir.ps1` lee el CSV de la remediación y reconoce dos formatos sin que haya que
+decirle cuál es: el de `2-deteccion.ps1` y una línea legible del tipo `Win 24H2 build
+26100.6899 | Upgrade: SI el 2026-03-10 | Ultimas KB: KB5066835 2026-10-14`, por si ya tienes
+tu propio script. Cada dato se saca por su forma y no por su posición, así que la redacción
+puede cambiar sin que deje de leerse. Si el equipo reporta una compilación más alta que la
+del inventario —normal: la remediación corre a diario y el export es del día que se hizo— el
+tablero usa la más alta y lo avisa.
 
 **«Por detrás» se mide contra tu propio parque, no contra el calendario.** Si un equipo sale
 con 7 por detrás, hay siete compilaciones más nuevas que la suya instaladas hoy en máquinas

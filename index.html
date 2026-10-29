@@ -6293,10 +6293,18 @@ VIEWS.consulta = { l: 'Consulta libre', ic: 'chart', f: vConsulta };
    maquinas tuyas, hoy.
    ========================================================================== */
 
-/* Los dos nombres que planta la remediacion. Van aqui y no en el script porque
-   el que tiene que reconocerlos es este lado. */
-const PAR_KB = 'parche de windows';
-const PAR_FECHA = 'parche instalado';
+/* Los nombres que planta la remediacion, y el campo en el que cae cada uno. Van
+   aqui y no en el script porque el que tiene que reconocerlos es este lado.
+   «Parche anterior» no esta: trae varios valores por equipo y su sitio es la
+   busqueda y la Consulta libre, no una columna. */
+const PAR_MARCAS = {
+  'parche de windows': 'kb',
+  'parche instalado': 'fecha',
+  'upgrade de windows': 'upg',
+  'windows anterior': 'antes',
+  'compilacion de windows': 'soloComp',
+  'compilación de windows': 'soloComp'
+};
 
 /** La compilacion partida: «10.0.26100.9445» -> { rel, rev }. */
 function compDe(osver) {
@@ -6306,7 +6314,8 @@ function compDe(osver) {
 }
 
 /**
- * El KB y la fecha que haya llegado por la remediacion, por equipo.
+ * Lo que haya llegado por la remediacion, por equipo: KB, fecha, upgrade y la
+ * compilacion que reporto el propio equipo.
  *
  * Se busca por NOMBRE y no por la clave de aplicacion: la clave se construye
  * normalizando fabricante y nombre, y basta que el fabricante llegue distinto
@@ -6315,31 +6324,62 @@ function compDe(osver) {
 function parchesDeRemediacion() {
   const T = M.tabla;
   const ca = T.crudo('app'), cv = T.crudo('ver'), cd = T.crudo('device');
+  const co = T.crudo('osver');
   const out = new Map();
   if (!ca.a || !cd.a) return out;
 
-  // que ids del diccionario son los dos marcadores
-  let idKb = -1, idFe = -1;
+  // que ids del diccionario de aplicaciones son marcadores, y de que campo
+  const campo = new Array(ca.vals.length);
+  let alguno = false;
   for (let k = 0; k < ca.vals.length; k++) {
-    const v = String(ca.vals[k] || '').trim().toLowerCase();
-    if (v === PAR_KB) idKb = k;
-    else if (v === PAR_FECHA) idFe = k;
+    const c = PAR_MARCAS[String(ca.vals[k] || '').trim().toLowerCase()];
+    if (c) { campo[k] = c; alguno = true; }
   }
-  if (idKb < 0 && idFe < 0) return out;
+  if (!alguno) return out;
 
-  const n = T.length;
-  for (let i = 0; i < n; i++) {
-    const a = ca.a[i];
-    if (a !== idKb && a !== idFe) continue;
+  // Por las filas del modelo y no por la tabla entera: la tabla es un almacen
+  // que solo crece, asi que al quitar una fuente sus filas siguen ahi. Leerla
+  // directamente haria que el KB de un CSV retirado siguiera saliendo.
+  const R = M.rows, n = R ? R.length : 0;
+  for (let k = 0; k < n; k++) {
+    const i = R.fisico(k);
+    const c = campo[ca.a[i]];
+    if (!c) continue;
     const dev = cd.vals[cd.a[i]];
     if (!dev) continue;
-    const val = cv.a ? cv.vals[cv.a[i]] : '';
-    if (!val) continue;
     let o = out.get(dev);
     if (!o) out.set(dev, o = {});
-    if (a === idKb) o.kb = val; else o.fecha = val;
+    // La compilacion la reporta el equipo desde su propio registro y el mismo
+    // dia, asi que viaja en todas sus filas. El inventario de Intune tambien la
+    // trae, pero del dia del export.
+    if (co.a) {
+      const ov = co.vals[co.a[i]];
+      if (ov) o.comp = mejorComp(o.comp, ov);
+    }
+    if (c === 'soloComp') continue;
+    const val = cv.a ? cv.vals[cv.a[i]] : '';
+    if (val) o[c] = val;
   }
   return out;
+}
+
+/**
+ * De dos compilaciones del mismo equipo, la mayor.
+ *
+ * Una llega del inventario y otra de la remediacion, y pueden no coincidir
+ * porque no son del mismo dia. Quedarse con la de una fuente fija seria tirar
+ * una moneda; quedarse con la mas alta no lo es: el UBR de una maquina solo
+ * sube. Y si entre medias hubo upgrade de version, la mas alta es tambien la
+ * nueva, porque 26100 es mayor que 22631.
+ */
+function mejorComp(a, b) {
+  if (!a) return b || '';
+  if (!b) return a;
+  const ca = compDe(a), cb = compDe(b);
+  if (!ca) return cb ? b : a;
+  if (!cb) return a;
+  if (cb.base !== ca.base) return cb.base > ca.base ? b : a;
+  return cb.rev > ca.rev ? b : a;
 }
 
 /* Cuanto hace de esa fecha. La remediacion la escribe en ISO, que se compara
@@ -6371,15 +6411,18 @@ const tramoDe = n => PAR_TRAMOS.findIndex(t => n <= t.max);
 function calculaParches() {
   const rem = parchesDeRemediacion();
   const porRel = new Map();        // release -> { revs:Map(rev->n), devs:[] }
-  let sinComp = 0;
+  let sinComp = 0, masFresca = 0;
 
   M.devInfo.forEach((f, dev) => {
-    const c = compDe(f.osver);
+    const r = rem.get(dev) || {};
+    const comp = mejorComp(f.osver, r.comp);
+    if (r.comp && comp === r.comp && comp !== f.osver) masFresca++;
+    const c = compDe(comp);
     if (!c) { sinComp++; return; }
     let o = porRel.get(c.rel);
     if (!o) porRel.set(c.rel, o = { revs: new Map(), devs: [], base: c.base });
     o.revs.set(c.rev, (o.revs.get(c.rev) || 0) + 1);
-    o.devs.push({ dev, rev: c.rev, f });
+    o.devs.push({ dev, rev: c.rev, f, r });
   });
 
   // dentro de cada version de Windows, las compilaciones de mas nueva a mas
@@ -6393,12 +6436,13 @@ function calculaParches() {
     const top = orden[0];
 
     for (const d of o.devs) {
-      const r = rem.get(d.dev) || {};
+      const r = d.r;
       const dias = diasDesde(r.fecha);
       filas.push({
         dev: d.dev, user: d.f.user || '', rel, comp: '10.0.' + o.base + '.' + d.rev,
         rev: d.rev, atras: pos.get(d.rev), tramo: tramoDe(pos.get(d.rev)),
-        kb: r.kb || '', parcheado: r.fecha || '', dias: dias
+        kb: r.kb || '', parcheado: r.fecha || '', dias: dias,
+        upg: r.upg || '', antes: r.antes || ''
       });
     }
 
@@ -6416,8 +6460,26 @@ function calculaParches() {
   conFecha.sort((a, b) => a.dias - b.dias);
   const mediana = conFecha.length ? conFecha[Math.floor(conFecha.length / 2)].dias : null;
 
+  // Los upgrades de version, si la remediacion los trae. Un equipo que llego a
+  // 24H2 por upgrade y otro que nacio en 24H2 tienen el mismo numero delante y
+  // no la misma historia: el primero arrastra la instalacion vieja.
+  const upMes = new Map(), upDesde = new Map();
+  let upSi = 0, upNo = 0;
+  for (const r of filas) {
+    if (!r.upg) continue;
+    if (/^no/i.test(r.upg)) { upNo++; continue; }
+    upSi++;
+    const m = /^(\d{4})-(\d{2})/.exec(r.upg);
+    if (m) upMes.set(m[1] + '-' + m[2], (upMes.get(m[1] + '-' + m[2]) || 0) + 1);
+    if (r.antes) {
+      const k = (/\b(2[0-9]H[12])\b/.exec(r.antes) || [, r.antes])[1];
+      upDesde.set(k, (upDesde.get(k) || 0) + 1);
+    }
+  }
+
   return { filas, releases, tramos, sinComp, conFecha: conFecha.length,
-           conKb: filas.filter(r => r.kb).length, mediana };
+           conKb: filas.filter(r => r.kb).length, mediana, masFresca,
+           upSi, upNo, upMes, upDesde };
 }
 
 /* ---------------------------------------------------------------------------
@@ -6482,9 +6544,21 @@ function vParches(A, rows) {
 
   const sinRem = !P.conKb ? `<div class="banner" style="margin:14px 0 0">${ico('alert')}<div>
     <b>No hay datos de KB.</b> La compilación dice quién va detrás de quién, pero no desde
-    cuándo. Para traer el número de KB y la fecha en que entró, pon <code>$Parches = 1</code>
-    en <code>2-deteccion.ps1</code> y carga el CSV que salga de la remediación: se funde con
-    esto y aparecen las dos últimas columnas de la tabla.
+    cuándo. Eso lo trae una remediación de Intune, y <code>3-convertir.ps1</code> entiende
+    dos formatos: el de <code>2-deteccion.ps1</code> con <code>$Parches = 1</code>, y una
+    línea legible del tipo <span class="mono mini">Win 24H2 build 26100.6899 | Upgrade: SI
+    el 2026-03-10 | Ultimas KB: KB5066835 2026-10-14</span>. Carga el CSV que salga: se
+    funde con esto y aparecen las columnas de KB, fecha y upgrade.
+  </div></div>` : '';
+
+  // Si la remediacion corre a diario y el export del inventario es de hace un
+  // mes, hay equipos cuyo nivel real es mas alto que el que trae el inventario.
+  const fresco = P.masFresca ? `<div class="banner" style="margin:14px 0 0">${ico('clock')}<div>
+    <b>${fmt(P.masFresca)}</b> ${P.masFresca === 1 ? 'equipo reporta' : 'equipos reportan'} por
+    la remediación una compilación más alta que la del inventario, y es la que se usa aquí.
+    El inventario es del día en que se exportó; la remediación, del día en que corrió.
+    De dos compilaciones del mismo equipo se toma siempre la más alta: el UBR de una máquina
+    solo sube.
   </div></div>` : '';
 
   // ---- reparto por tramo de retraso
@@ -6502,8 +6576,40 @@ function vParches(A, rows) {
   rezago.sort((a, b) => b.n - a.n);
   const top = rezago.slice(0, 12);
 
+  // ---- upgrades de version, solo si alguien los reporta
+  const upTot = P.upSi + P.upNo;
+  const meses = Array.from(P.upMes.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, 18);
+  const desde = Array.from(P.upDesde.entries()).sort((a, b) => b[1] - a[1]);
+  const upgSec = !upTot ? '' :
+    sec('Upgrades de versión',
+      `${fmt(P.upSi)} de los ${fmt(upTot)} equipos que lo reportan llegaron a su versión ` +
+      `por upgrade; ${fmt(P.upNo)} son instalación limpia`) +
+    `<div class="gwide">` +
+      card({ title: 'Cuándo se hizo el upgrade', sub: 'Por mes, del más reciente al más antiguo',
+        body: meses.length
+          ? barH(meses.map(x => [x[0], x[1], '', '']), { unit: 'Equipos', W: 560, labelW: 120,
+              trunc: 12, rowH: 23, aria: 'Upgrades por mes' })
+          : `<div class="empty" style="padding:22px">Los equipos con upgrade no traen la fecha.</div>`,
+        table: twin(['Mes', 'Equipos'], meses.map(x => [x[0], fmt(x[1])])) }) +
+      card({ title: 'Venían de', sub: 'La versión que tenía el equipo antes del upgrade',
+        body: desde.length
+          ? barH(desde.map(x => [x[0], x[1], '', '']), { unit: 'Equipos', W: 560, labelW: 150,
+              trunc: 18, rowH: 25, aria: 'Version anterior al upgrade' })
+          : `<div class="empty" style="padding:22px">Sin versión anterior reportada.</div>`,
+        table: twin(['Versión anterior', 'Equipos'], desde.map(x => [x[0], fmt(x[1])])) }) +
+    `</div>`;
+
+  // Las dos columnas del upgrade solo se ponen si hay algo que poner: dos
+  // columnas vacias en cuarenta mil filas solo estorban al que lee la tabla.
+  const colsDev = [{ k: 'dev', l: 'Equipo', cls: 'name' }, { k: 'user', l: 'Usuario' },
+    { k: 'rel', l: 'Windows' }, { k: 'comp', l: 'Compilación' },
+    { k: 'atras', l: 'Por detrás', n: true },
+    { k: 'kb', l: 'Último KB' }, { k: 'parcheado', l: 'Parcheado el' },
+    { k: 'dias', l: 'Días', n: true }];
+  if (upTot) colsDev.push({ k: 'upg', l: 'Upgrade' }, { k: 'antes', l: 'Venía de' });
+
   return viewHead('Parches', 'En qué nivel de parche va cada máquina, y cuánto lleva ahí.') +
-    kpis + comoSeMide + sinRem +
+    kpis + comoSeMide + sinRem + fresco +
     sec('Cómo está repartido el retraso', 'Cuántas máquinas van al día y cuántas se han quedado atrás') +
     `<div class="gwide">` +
       card({ title: 'Equipos por retraso', sub: 'Compilaciones más nuevas que la suya, dentro de su versión de Windows',
@@ -6533,16 +6639,19 @@ function vParches(A, rows) {
         return esc(r[c.k]);
       } }) +
 
+    upgSec +
+
     sec('Equipo por equipo', 'Pulsa una fila para abrir el equipo. El botón de Excel se lleva la tabla entera') +
     mtable({ id: 'parDev', title: 'Nivel de parche por equipo', data: P.filas,
       sort: { k: 'atras', d: -1 },
       rowAttr: x => `data-godev="${esc(x.dev)}"`,
-      cols: [{ k: 'dev', l: 'Equipo', cls: 'name' }, { k: 'user', l: 'Usuario' },
-        { k: 'rel', l: 'Windows' }, { k: 'comp', l: 'Compilación' },
-        { k: 'atras', l: 'Por detrás', n: true },
-        { k: 'kb', l: 'Último KB' }, { k: 'parcheado', l: 'Parcheado el' },
-        { k: 'dias', l: 'Días', n: true }],
+      cols: colsDev,
       cell: (x, c) => {
+        if (c.k === 'upg') return !x.upg ? '<span class="muted">—</span>'
+          : /^no/i.test(x.upg) ? '<span class="muted">Limpia</span>'
+          : `<span class="mono mini">${esc(x.upg)}</span>`;
+        if (c.k === 'antes') return x.antes
+          ? `<span class="mono mini">${esc(x.antes)}</span>` : '<span class="muted">—</span>';
         if (c.k === 'comp') return `<span class="mono mini">${esc(x.comp)}</span>`;
         if (c.k === 'atras') return x.atras === 0
           ? '<span class="sem sem-pill ok">Al día</span>'
