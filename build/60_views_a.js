@@ -396,7 +396,8 @@ function vAplicaciones(A, rows) {
         { k:'rec', l:'Versión aprobada' }, { k:'pctOk', l:'% al día', n:true },
         { k:'gest', l:'Administrada' }, { k:'estado', l:'Estado' }],
       cell:(r,c) => {
-        if (c.k === 'name') return (r.crit ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : '') + esc(r.name);
+        if (c.k === 'name') return celdaIc(r.name, r.vendor, '', '', icCrit(r.crit));
+        if (c.k === 'vendor') return celdaIc(r.vendor, r.vendor, '', 'sm');
         if (c.k === 'inst') return r.infla
           ? `${fmt(r.inst)}<span class="mini" style="color:var(--warn-ink)" title="El catálogo cuenta ${fmt(r.infla)} instalaciones: hay equipos con más de una entrada de esta aplicación"> · ${fmt(r.infla)} inst.</span>`
           : fmt(r.inst);
@@ -715,7 +716,7 @@ function vEquipo(A, rows, dev) {
         { k:'ord', l:'Estado' }],
       cell:(r,c) => {
         if (c.k === 'ord') return semaforo(r.estado);
-        if (c.k === 'name') return (r.crit ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : '') + esc(r.name);
+        if (c.k === 'name') return celdaIc(r.name, r.vendor, '', '', icCrit(r.crit));
         if (c.k === 'ver' || c.k === 'rec') return `<span class="mono">${esc(r[c.k])}</span>`;
         if (c.k === 'gest') return r.gest === 'Sí' ? '<span class="pill y">Sí</span>' : '<span class="pill n">No</span>';
         return esc(r[c.k] || '—');

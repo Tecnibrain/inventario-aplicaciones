@@ -40,9 +40,41 @@
 <!-- ============ PANTALLA DE CARGA ============ -->
 <section class="drop" id="dropScreen">
   <div class="drop-card" id="dropCard">
-    <svg class="drop-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-      <path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>
+    <!-- Dibujada aqui, en el propio archivo: una imagen traida de fuera seria
+         la unica peticion que esta pagina hace, y de eso va la garantia. -->
+    <svg class="drop-art" viewBox="0 0 300 136" role="img"
+         aria-label="Archivos de inventario que se convierten en un tablero">
+      <g>
+        <rect class="a-doc" x="16" y="28" width="58" height="76" rx="8" transform="rotate(-9 45 66)"/>
+        <rect class="a-doc" x="23" y="24" width="58" height="76" rx="8" transform="rotate(-4.5 52 62)"/>
+        <rect class="a-doc" x="30" y="20" width="58" height="76" rx="8"/>
+        <g class="a-row">
+          <rect x="40" y="34" width="33" height="4" rx="2"/>
+          <rect x="40" y="45" width="38" height="4" rx="2"/>
+          <rect x="40" y="56" width="25" height="4" rx="2"/>
+          <rect x="40" y="67" width="36" height="4" rx="2"/>
+          <rect x="40" y="78" width="29" height="4" rx="2"/>
+        </g>
+      </g>
+      <path class="a-line" d="M96 58 C 118 58, 118 68, 140 68" stroke-dasharray="4 5"/>
+      <circle class="a-dot" cx="118" cy="63" r="3"/>
+      <rect class="a-panel" x="148" y="18" width="138" height="100" rx="11"/>
+      <g class="a-row">
+        <rect x="160" y="30" width="38" height="5" rx="2.5"/>
+        <rect x="160" y="41" width="22" height="4" rx="2"/>
+      </g>
+      <circle class="a-dot" cx="272" cy="33" r="3.5"/>
+      <g class="a-bar2">
+        <rect x="160" y="78" width="14" height="26" rx="3"/>
+        <rect x="200" y="86" width="14" height="18" rx="3"/>
+        <rect x="240" y="80" width="14" height="24" rx="3"/>
+      </g>
+      <g class="a-bar">
+        <rect x="180" y="62" width="14" height="42" rx="3"/>
+        <rect x="220" y="54" width="14" height="50" rx="3"/>
+        <rect x="260" y="68" width="14" height="36" rx="3"/>
+      </g>
+      <path class="a-line" d="M156 108h124" stroke-opacity=".6"/>
     </svg>
     <h2>Carga el inventario de tus equipos</h2>
     <p>Arrastra el <b>detalle.parquet</b> que deja el script. También vale cualquier

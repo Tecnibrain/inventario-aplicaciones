@@ -497,6 +497,32 @@ table.mt select.cell{background:var(--surface-2);border:1px solid var(--line);bo
 .mt-bar .mt-exp{padding:6px 12px;font-size:11.5px;flex:none;margin-left:auto}
 .mt-bar .fsearch{margin-left:auto;max-width:250px}
 .mt-bar .mt-exp~.fsearch{margin-left:10px}
+
+/* --- Monogramas -----------------------------------------------------------
+   Un cuadro con las iniciales y un color derivado del nombre. No es el logo
+   de nadie: dibujar logos de marca pediria traerlos de fuera, y aqui no se
+   pide nada fuera. Cumple lo que un logo cumple en una tabla larga -que el
+   ojo encuentre la fila sin leerla- y no miente sobre su origen. */
+.mono-av{display:inline-flex;align-items:center;justify-content:center;width:27px;height:27px;
+  border-radius:8px;font-family:var(--font-d);font-size:10.5px;font-weight:900;letter-spacing:.02em;
+  flex:none;text-transform:uppercase;user-select:none;
+  background:linear-gradient(145deg,hsl(var(--h) 55% 19%),hsl(var(--h) 60% 13%));
+  color:hsl(var(--h) 80% 72%);border:1px solid hsl(var(--h) 45% 27%)}
+.mono-av.sm{width:21px;height:21px;border-radius:6px;font-size:9px}
+.ic-row{display:flex;align-items:center;gap:9px;min-width:0}
+.ic-row .ic-tx{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ic-row .ic-sub{font-size:10.5px;color:var(--ink-4);font-weight:600}
+
+/* --- La ilustracion de la pantalla de carga ------------------------------- */
+.drop-art{width:100%;max-width:300px;margin:0 auto 22px;display:block}
+.drop-art .a-line{stroke:var(--line);stroke-width:1.5;fill:none}
+.drop-art .a-doc{fill:var(--surface-2);stroke:#343434;stroke-width:1.5}
+.drop-art .a-row{fill:#3A3A3A}
+.drop-art .a-panel{fill:var(--surface-2);stroke:var(--line);stroke-width:1.5}
+.drop-art .a-bar{fill:var(--brand);opacity:.85}
+.drop-art .a-bar2{fill:var(--brand);opacity:.35}
+.drop-art .a-dot{fill:var(--brand)}
+.drop-card.hot .drop-art .a-doc{stroke:var(--brand);fill:#10201F}
 </style>
 </head>
 <body data-mode="admin">
@@ -539,9 +565,41 @@ table.mt select.cell{background:var(--surface-2);border:1px solid var(--line);bo
 <!-- ============ PANTALLA DE CARGA ============ -->
 <section class="drop" id="dropScreen">
   <div class="drop-card" id="dropCard">
-    <svg class="drop-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-      <path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>
+    <!-- Dibujada aqui, en el propio archivo: una imagen traida de fuera seria
+         la unica peticion que esta pagina hace, y de eso va la garantia. -->
+    <svg class="drop-art" viewBox="0 0 300 136" role="img"
+         aria-label="Archivos de inventario que se convierten en un tablero">
+      <g>
+        <rect class="a-doc" x="16" y="28" width="58" height="76" rx="8" transform="rotate(-9 45 66)"/>
+        <rect class="a-doc" x="23" y="24" width="58" height="76" rx="8" transform="rotate(-4.5 52 62)"/>
+        <rect class="a-doc" x="30" y="20" width="58" height="76" rx="8"/>
+        <g class="a-row">
+          <rect x="40" y="34" width="33" height="4" rx="2"/>
+          <rect x="40" y="45" width="38" height="4" rx="2"/>
+          <rect x="40" y="56" width="25" height="4" rx="2"/>
+          <rect x="40" y="67" width="36" height="4" rx="2"/>
+          <rect x="40" y="78" width="29" height="4" rx="2"/>
+        </g>
+      </g>
+      <path class="a-line" d="M96 58 C 118 58, 118 68, 140 68" stroke-dasharray="4 5"/>
+      <circle class="a-dot" cx="118" cy="63" r="3"/>
+      <rect class="a-panel" x="148" y="18" width="138" height="100" rx="11"/>
+      <g class="a-row">
+        <rect x="160" y="30" width="38" height="5" rx="2.5"/>
+        <rect x="160" y="41" width="22" height="4" rx="2"/>
+      </g>
+      <circle class="a-dot" cx="272" cy="33" r="3.5"/>
+      <g class="a-bar2">
+        <rect x="160" y="78" width="14" height="26" rx="3"/>
+        <rect x="200" y="86" width="14" height="18" rx="3"/>
+        <rect x="240" y="80" width="14" height="24" rx="3"/>
+      </g>
+      <g class="a-bar">
+        <rect x="180" y="62" width="14" height="42" rx="3"/>
+        <rect x="220" y="54" width="14" height="50" rx="3"/>
+        <rect x="260" y="68" width="14" height="36" rx="3"/>
+      </g>
+      <path class="a-line" d="M156 108h124" stroke-opacity=".6"/>
     </svg>
     <h2>Carga el inventario de tus equipos</h2>
     <p>Arrastra el <b>detalle.parquet</b> que deja el script. También vale cualquier
@@ -3850,6 +3908,63 @@ function twin(heads, rows) {
 
 
 /* ============================================================================
+   13b. MONOGRAMAS  ·  que el ojo encuentre la fila sin leerla
+   ---------------------------------------------------------------------------
+   Una tabla de seis mil aplicaciones es un muro de texto. Un logo por fila lo
+   rompe, pero traer logos pide salir a buscarlos a algun sitio, y de eso va
+   justo la garantia de esta herramienta: nada de lo que cargas sale, y nada
+   se pide fuera. Dibujarlos a mano seria ademas inventar la marca de otro.
+
+   Asi que iniciales y un color estable derivado del nombre. Cumple lo mismo
+   -reconocer la fila de un vistazo, agrupar por fabricante sin leer- sin
+   pedir nada ni atribuirse nada.
+   ========================================================================== */
+
+/* Sufijos de sociedad: no distinguen a nadie y gastan las dos letras utiles. */
+const MONO_SUFIJOS = /^(inc|incorporated|corp|corporation|llc|ltd|limited|gmbh|sa|sas|sl|srl|bv|nv|ag|co|company|plc|oy|ab|as|spa|pty|group|software|systems?|technologies|technology|solutions)$/;
+
+/** Un tono estable: el mismo nombre da siempre el mismo color. */
+function monoTono(s) {
+  let h = 2166136261;
+  const t = String(s || '');
+  for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
+  // Solo la mitad fria del circulo, de 150 a 340: del verde azulado al rosa.
+  // El rojo, el ambar y el verde estan cogidos por el semaforo, y un
+  // monograma verde junto a una columna de estados se lee como «cumple».
+  // Ademas asi el conjunto parece una paleta elegida y no un arcoiris.
+  return 150 + (h >>> 0) % 190;
+}
+
+/** Dos letras: una por palabra si hay varias, dos de la primera si no. */
+function monoIni(s) {
+  const pal = String(s || '').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/)
+    .filter(p => p && !MONO_SUFIJOS.test(p.toLowerCase()));
+  if (!pal.length) return '··';
+  if (pal.length === 1) return pal[0].slice(0, 2);
+  return pal[0][0] + pal[1][0];
+}
+
+/**
+ * El monograma. `tono` permite colorear por fabricante y poner las iniciales
+ * de la aplicacion: asi todo lo de un mismo fabricante sale del mismo color y
+ * las letras siguen diciendo cual es cual.
+ */
+function mono(nombre, tono, clase) {
+  const h = monoTono(norm(tono == null ? nombre : tono) || 'x');
+  return `<span class="mono-av${clase ? ' ' + clase : ''}" style="--h:${h}" aria-hidden="true">${
+    esc(monoIni(nombre))}</span>`;
+}
+
+/** Celda de tabla con monograma a la izquierda y el texto truncable al lado. */
+function celdaIc(nombre, tono, sub, clase, pre) {
+  return `<div class="ic-row">${mono(nombre, tono, clase)}<div class="ic-tx">${pre || ''}${esc(nombre)}${
+    sub ? `<div class="ic-sub">${esc(sub)}</div>` : ''}</div></div>`;
+}
+
+/* La estrella de aplicacion critica, para anteponerla al nombre. */
+const icCrit = c => c ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : '';
+
+/* ============================================================================
    5. ESTADO · RUTAS · FILTRADO CRUZADO
    ========================================================================== */
 const DIMS = {
@@ -5016,7 +5131,8 @@ function vAplicaciones(A, rows) {
         { k:'rec', l:'Versión aprobada' }, { k:'pctOk', l:'% al día', n:true },
         { k:'gest', l:'Administrada' }, { k:'estado', l:'Estado' }],
       cell:(r,c) => {
-        if (c.k === 'name') return (r.crit ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : '') + esc(r.name);
+        if (c.k === 'name') return celdaIc(r.name, r.vendor, '', '', icCrit(r.crit));
+        if (c.k === 'vendor') return celdaIc(r.vendor, r.vendor, '', 'sm');
         if (c.k === 'inst') return r.infla
           ? `${fmt(r.inst)}<span class="mini" style="color:var(--warn-ink)" title="El catálogo cuenta ${fmt(r.infla)} instalaciones: hay equipos con más de una entrada de esta aplicación"> · ${fmt(r.infla)} inst.</span>`
           : fmt(r.inst);
@@ -5335,7 +5451,7 @@ function vEquipo(A, rows, dev) {
         { k:'ord', l:'Estado' }],
       cell:(r,c) => {
         if (c.k === 'ord') return semaforo(r.estado);
-        if (c.k === 'name') return (r.crit ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : '') + esc(r.name);
+        if (c.k === 'name') return celdaIc(r.name, r.vendor, '', '', icCrit(r.crit));
         if (c.k === 'ver' || c.k === 'rec') return `<span class="mono">${esc(r[c.k])}</span>`;
         if (c.k === 'gest') return r.gest === 'Sí' ? '<span class="pill y">Sí</span>' : '<span class="pill n">No</span>';
         return esc(r[c.k] || '—');
@@ -6949,8 +7065,12 @@ function vParches(A, rows) {
       rowAttr: x => `data-godev="${esc(x.dev)}"`,
       cols: colsDev,
       cell: (x, c) => {
+        // La fecha del upgrade es la misma que la de instalacion -el dia en
+        // que entro el Windows que hay puesto- pero quien busca «cuando se
+        // actualizo este equipo» la busca aqui, no en la columna de al lado.
         if (c.k === 'upg') return !x.upg ? '<span class="muted">—</span>'
-          : /^no/i.test(x.upg) ? '<span class="muted">Limpia</span>' : 'Sí';
+          : /^no/i.test(x.upg) ? '<span class="muted">Limpia</span>'
+          : 'Sí' + (x.inst ? `<div class="mini mono" style="color:var(--ink-4)">${esc(x.inst)}</div>` : '');
         if (c.k === 'inst') return x.inst
           ? `<span class="mono mini">${esc(x.inst)}</span>` : '<span class="muted">—</span>';
         if (c.k === 'antes') return x.antes
@@ -7016,13 +7136,17 @@ function bloqueParches(dev) {
   if (f.kb) facts.push(['Último KB', `<span class="mono">${esc(f.kb)}</span>`]);
   if (f.parcheado) facts.push(['Parcheado el',
     esc(f.parcheado) + (f.dias != null ? ha(fmt(f.dias) + ' días') : '')]);
+  // La misma fecha se llama distinto segun como llegara el Windows, y el que
+  // busca «cuando se actualizo» no deberia tener que saber que es la misma.
+  const subio = f.upg && !/^no/i.test(f.upg);
   if (f.inst) {
     const d = diasDesde(f.inst);
-    facts.push(['Windows instalado', esc(f.inst) + (d != null ? ha(mesesDe(d)) : '')]);
+    facts.push([subio ? 'Actualizado el' : f.upg ? 'Instalado limpio el' : 'Windows instalado',
+      `<span class="mono">${esc(f.inst)}</span>` + (d != null ? ha(mesesDe(d)) : '')]);
   }
-  if (f.upg) facts.push(['Cómo llegó', /^no/i.test(f.upg)
-    ? 'Instalación limpia'
-    : 'Upgrade' + (f.antes ? `<div class="mini" style="color:var(--ink-4);font-weight:600">desde ${esc(f.antes)}</div>` : '')]);
+  if (f.upg) facts.push(['Cómo llegó', subio
+    ? 'Upgrade de versión' + (f.antes ? `<div class="mini" style="color:var(--ink-4);font-weight:600">desde ${esc(f.antes)}</div>` : '')
+    : 'Instalación limpia']);
 
   const lista = kbs.length ? `<div class="fact" style="grid-column:1/-1">
       <dt>KB aplicados${kbs.length > 1 ? ' · ' + fmt(kbs.length) : ''}</dt>

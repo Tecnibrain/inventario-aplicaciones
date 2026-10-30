@@ -400,8 +400,12 @@ function vParches(A, rows) {
       rowAttr: x => `data-godev="${esc(x.dev)}"`,
       cols: colsDev,
       cell: (x, c) => {
+        // La fecha del upgrade es la misma que la de instalacion -el dia en
+        // que entro el Windows que hay puesto- pero quien busca «cuando se
+        // actualizo este equipo» la busca aqui, no en la columna de al lado.
         if (c.k === 'upg') return !x.upg ? '<span class="muted">—</span>'
-          : /^no/i.test(x.upg) ? '<span class="muted">Limpia</span>' : 'Sí';
+          : /^no/i.test(x.upg) ? '<span class="muted">Limpia</span>'
+          : 'Sí' + (x.inst ? `<div class="mini mono" style="color:var(--ink-4)">${esc(x.inst)}</div>` : '');
         if (c.k === 'inst') return x.inst
           ? `<span class="mono mini">${esc(x.inst)}</span>` : '<span class="muted">—</span>';
         if (c.k === 'antes') return x.antes
@@ -467,13 +471,17 @@ function bloqueParches(dev) {
   if (f.kb) facts.push(['Último KB', `<span class="mono">${esc(f.kb)}</span>`]);
   if (f.parcheado) facts.push(['Parcheado el',
     esc(f.parcheado) + (f.dias != null ? ha(fmt(f.dias) + ' días') : '')]);
+  // La misma fecha se llama distinto segun como llegara el Windows, y el que
+  // busca «cuando se actualizo» no deberia tener que saber que es la misma.
+  const subio = f.upg && !/^no/i.test(f.upg);
   if (f.inst) {
     const d = diasDesde(f.inst);
-    facts.push(['Windows instalado', esc(f.inst) + (d != null ? ha(mesesDe(d)) : '')]);
+    facts.push([subio ? 'Actualizado el' : f.upg ? 'Instalado limpio el' : 'Windows instalado',
+      `<span class="mono">${esc(f.inst)}</span>` + (d != null ? ha(mesesDe(d)) : '')]);
   }
-  if (f.upg) facts.push(['Cómo llegó', /^no/i.test(f.upg)
-    ? 'Instalación limpia'
-    : 'Upgrade' + (f.antes ? `<div class="mini" style="color:var(--ink-4);font-weight:600">desde ${esc(f.antes)}</div>` : '')]);
+  if (f.upg) facts.push(['Cómo llegó', subio
+    ? 'Upgrade de versión' + (f.antes ? `<div class="mini" style="color:var(--ink-4);font-weight:600">desde ${esc(f.antes)}</div>` : '')
+    : 'Instalación limpia']);
 
   const lista = kbs.length ? `<div class="fact" style="grid-column:1/-1">
       <dt>KB aplicados${kbs.length > 1 ? ' · ' + fmt(kbs.length) : ''}</dt>

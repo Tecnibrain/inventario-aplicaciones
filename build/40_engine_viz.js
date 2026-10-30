@@ -574,3 +574,60 @@ function twin(heads, rows) {
     <tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${i ? ' class="n"' : ''}>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 }
 
+
+/* ============================================================================
+   13b. MONOGRAMAS  ·  que el ojo encuentre la fila sin leerla
+   ---------------------------------------------------------------------------
+   Una tabla de seis mil aplicaciones es un muro de texto. Un logo por fila lo
+   rompe, pero traer logos pide salir a buscarlos a algun sitio, y de eso va
+   justo la garantia de esta herramienta: nada de lo que cargas sale, y nada
+   se pide fuera. Dibujarlos a mano seria ademas inventar la marca de otro.
+
+   Asi que iniciales y un color estable derivado del nombre. Cumple lo mismo
+   -reconocer la fila de un vistazo, agrupar por fabricante sin leer- sin
+   pedir nada ni atribuirse nada.
+   ========================================================================== */
+
+/* Sufijos de sociedad: no distinguen a nadie y gastan las dos letras utiles. */
+const MONO_SUFIJOS = /^(inc|incorporated|corp|corporation|llc|ltd|limited|gmbh|sa|sas|sl|srl|bv|nv|ag|co|company|plc|oy|ab|as|spa|pty|group|software|systems?|technologies|technology|solutions)$/;
+
+/** Un tono estable: el mismo nombre da siempre el mismo color. */
+function monoTono(s) {
+  let h = 2166136261;
+  const t = String(s || '');
+  for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
+  // Solo la mitad fria del circulo, de 150 a 340: del verde azulado al rosa.
+  // El rojo, el ambar y el verde estan cogidos por el semaforo, y un
+  // monograma verde junto a una columna de estados se lee como «cumple».
+  // Ademas asi el conjunto parece una paleta elegida y no un arcoiris.
+  return 150 + (h >>> 0) % 190;
+}
+
+/** Dos letras: una por palabra si hay varias, dos de la primera si no. */
+function monoIni(s) {
+  const pal = String(s || '').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/)
+    .filter(p => p && !MONO_SUFIJOS.test(p.toLowerCase()));
+  if (!pal.length) return '··';
+  if (pal.length === 1) return pal[0].slice(0, 2);
+  return pal[0][0] + pal[1][0];
+}
+
+/**
+ * El monograma. `tono` permite colorear por fabricante y poner las iniciales
+ * de la aplicacion: asi todo lo de un mismo fabricante sale del mismo color y
+ * las letras siguen diciendo cual es cual.
+ */
+function mono(nombre, tono, clase) {
+  const h = monoTono(norm(tono == null ? nombre : tono) || 'x');
+  return `<span class="mono-av${clase ? ' ' + clase : ''}" style="--h:${h}" aria-hidden="true">${
+    esc(monoIni(nombre))}</span>`;
+}
+
+/** Celda de tabla con monograma a la izquierda y el texto truncable al lado. */
+function celdaIc(nombre, tono, sub, clase, pre) {
+  return `<div class="ic-row">${mono(nombre, tono, clase)}<div class="ic-tx">${pre || ''}${esc(nombre)}${
+    sub ? `<div class="ic-sub">${esc(sub)}</div>` : ''}</div></div>`;
+}
+
+/* La estrella de aplicacion critica, para anteponerla al nombre. */
+const icCrit = c => c ? '<span title="Crítica" style="color:var(--warn)">★ </span>' : '';
